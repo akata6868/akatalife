@@ -1,0 +1,38 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Next.js build output
+/.next/
+/out/
+/build
+next-env.d.ts
+
+# Environment & Secrets (NEVER commit real secrets)
+.env
+.env.*
+!.env.example
+
+# Private Document Uploads & Local Storage (NEVER commit personal files)
+/storage/
+/uploads/
+/backups/
+*.sql
+*.sql.gz
+*.dump
+*.pem
+*.key
+
+# Testing & Coverage
+/coverage
+/playwright-report/
+/test-results/
+
+# Debug & OS files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.DS_Store
+*.tsbuildinfo
