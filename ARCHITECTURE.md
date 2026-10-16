@@ -2,14 +2,15 @@
 
 ## 1. Architectural Overview
 
-**Akata Life** is a modular, monolithic full-stack web application designed for private self-hosting on a single VPS using Docker Compose. It prioritizes **data integrity**, **strict server-side authorization**, **zero public exposure of sensitive documents or database ports**, and **German/Turkish localization**.
+**Akata Life** is a modular, production-oriented full-stack web application deployed via **GitHub + Coolify**, backed by **Supabase PostgreSQL**, and equipped with a dedicated **Hermes Agent API (`/api/v1/agent/*`)** so that **Hermes Agent** has full programmatic read/write capabilities across all household modules alongside the human web/PWA interface.
 
 ```mermaid
 flowchart LR
-    Client["iPhone PWA / Desktop Browser"] -->|HTTPS| Proxy["Reverse Proxy (Caddy / Nginx)"]
-    Proxy -->|Internal HTTP :3000| App["Next.js App Router Server (Node.js)"]
-    App -->|Prisma ORM (Private Bridge)| DB[("PostgreSQL 16")]
-    App -->|Authorized Stream| Storage[("Private Document Volume (/data/uploads)")]
+    Client["iPhone PWA / Desktop Browser"] -->|HTTPS| Coolify["Coolify Reverse Proxy (Traefik/Caddy)"]
+    Hermes["Hermes Agent"] -->|HTTPS + Bearer API Key| Coolify
+    Coolify -->|Internal HTTP :3000| App["Next.js App Router Server (Node.js)"]
+    App -->|Prisma ORM (DATABASE_URL / DIRECT_URL)| Supabase[("Supabase PostgreSQL")]
+    App -->|Authorized Stream| Storage[("Private Document Storage (Coolify Volume / Supabase Storage)")]
     App -.->|Optional Server-Side HTTPS| HA["Home Assistant API (Read-Only)"]
 ```
 
@@ -19,20 +20,44 @@ flowchart LR
 
 | Layer | Technology | Rationale |
 | :--- | :--- | :--- |
-| **Framework** | Next.js (App Router, TypeScript strict) | Unified server-rendered UI, Server Actions, and API routes for binary document streaming and health checks. |
-| **Styling & UI** | Tailwind CSS + Radix UI / shadcn-compatible components + Lucide Icons | Accessible keyboard navigation, clean light/dark theme tokens, responsive mobile-first layouts without heavy runtime overhead. |
+| **Framework** | Next.js (App Router, TypeScript strict) | Unified server-rendered UI, Server Actions, and REST API endpoints for both browser sessions and Hermes Agent. |
+| **Deployment** | GitHub + Coolify (`Dockerfile` standalone build) | Push-to-deploy from GitHub with Coolify managing TLS certificates, container healthchecks (`/api/health`), and persistent volumes. |
+| **Database & ORM** | Supabase PostgreSQL + Prisma ORM | Managed PostgreSQL reliability with `DATABASE_URL` (connection pooler) and `DIRECT_URL` (migrations), strict relational integrity, and integer minor-unit precision. |
+| **Hermes Agent Access** | REST API (`/api/v1/agent/*`) + OpenAPI 3.1 Spec (`/api/v1/agent/openapi.json`) | Gives Hermes Agent full CRUD access to contracts, documents, transactions, invoices, reminders, home inventory, and dashboard summaries using Bearer token auth. |
+| **Styling & UI** | Tailwind CSS + Accessible UI primitives + Lucide Icons | Clean light/dark theme tokens, responsive mobile-first layouts for iPhone PWA and desktop. |
 | **Charts** | Recharts | Composable, responsive SVG charts backed directly by database aggregates. |
-| **Forms & Validation** | React Hook Form + Zod | Shared client/server schema validation with localized error messages (`de` / `tr`). |
-| **Database & ORM** | PostgreSQL 16 + Prisma ORM | Strict relational integrity, version-controlled SQL migrations, and `Decimal(12,2)` / integer minor-unit precision. |
-| **Authentication** | Custom Database Session + Argon2id (`@node-rs/argon2` / `oslo`) + TOTP (`otpauth`) | Full control over session revocation, rate limiting, HTTP-only secure cookies, and zero third-party auth vendor lock-in. |
-| **Testing** | Vitest (Unit/Integration) + Playwright (E2E) | Fast domain logic verification (money math, deadlines, auth guards) and full browser journey testing. |
+| **Forms & Validation** | React Hook Form + Zod | Shared schema validation for both UI forms and Hermes Agent JSON payloads. |
+| **Authentication** | Database Session + Argon2id/scrypt + TOTP (`otpauth`) + Scoped Agent API Keys | Human sessions via `HttpOnly` cookies; Hermes Agent via SHA-256 hashed Bearer API keys (`HERMES_AGENT_API_KEY`). |
+| **Testing** | Vitest (Unit/Integration) + Playwright (E2E) | Fast domain logic verification (money math, deadlines, auth guards, Hermes Agent API endpoints) and full browser journey testing. |
 
 ---
 
-## 3. Financial & Date Integrity Rules
+## 3. Hermes Agent Integration Architecture (`/api/v1/agent/*`)
+
+Hermes Agent is a first-class citizen of Akata Life. Every domain service (`contracts`, `documents`, `transactions`, `invoices`, `reminders`, `home`, `dashboard`) is implemented in a clean service layer (`src/lib/services/*`) shared by both:
+1. **Next.js UI / Server Actions** (authenticated via user session cookie)
+2. **Hermes Agent API (`/api/v1/agent/*`)** (authenticated via `Authorization: Bearer <HERMES_AGENT_API_KEY>` or database-managed `AgentApiKey`)
+
+### Hermes Agent Endpoints
+- `GET /api/v1/agent/openapi.json` — Machine-readable OpenAPI 3.1 / tool schema so Hermes Agent automatically discovers all endpoints, parameters, and schemas.
+- `GET /api/v1/agent/summary` — Complete household snapshot (current month income/expenses/budget, upcoming bills, expiring contracts, pending reminders, recent documents).
+- `GET | POST /api/v1/agent/contracts` & `GET | PATCH | DELETE /api/v1/agent/contracts/[id]` — Full contract management & deadline calculation.
+- `GET | POST /api/v1/agent/documents` & `GET | PATCH | DELETE /api/v1/agent/documents/[id]` — Document metadata CRUD, search, and multipart/base64 file upload & authorized download.
+- `GET | POST /api/v1/agent/transactions` & `GET | PATCH | DELETE /api/v1/agent/transactions/[id]` — Income & expense recording and filtering.
+- `GET | POST /api/v1/agent/invoices` & `GET | PATCH | DELETE /api/v1/agent/invoices/[id]` — Invoice tracking, marking bills as paid, recurring bill generation.
+- `GET | POST /api/v1/agent/reminders` & `GET | PATCH | DELETE /api/v1/agent/reminders/[id]` — Reminder management & completion.
+- `GET | POST /api/v1/agent/home` — Property, rooms, household assets, maintenance records, and meter readings.
+
+### Security & Auditability for Hermes Agent
+- Constant-time token comparison (`crypto.timingSafeEqual`) against SHA-256 hashed keys.
+- All mutations performed by Hermes Agent automatically write an `AuditEvent` record with `actorType: "HERMES_AGENT"` so the owner can see every action Hermes Agent took in the UI (`Backup & Systemstatus` / Audit Log).
+
+---
+
+## 4. Financial & Date Integrity Rules
 
 1. **No Floating-Point Money Math:**
-   - Database columns store monetary amounts as ` integer` minor units (`amountCents`) or `Decimal(12, 2)`.
+   - Database columns store monetary amounts as integer minor units (`amountCents`) or `Decimal(12, 2)`.
    - All arithmetic in TypeScript uses integer minor units (cents) and converts to formatted strings only at the presentation layer.
 2. **German Localization Defaults (`de-DE` & `tr-TR`):**
    - Time zone: `Europe/Berlin`
@@ -42,34 +67,12 @@ flowchart LR
 
 ---
 
-## 4. Security Architecture
-
-### 4.1 Authentication & Session Management
-- **Single-User Owner Model (Extensible to Household Members):** Public registration is disabled. The initial owner account is provisioned via a secure CLI/seed bootstrap script using environment secrets.
-- **Password Hashing:** Argon2id with strong memory/time cost parameters.
-- **TOTP Multi-Factor Authentication:** Standard RFC 6238 TOTP (`otpauth`) with encrypted secret storage and recovery codes.
-- **Login Rate Limiting:** Database/memory-backed sliding window limiter per IP and email to block brute-force attempts, logged in `AuditEvent`.
-- **Sessions:** Stored in the `Session` table with SHA-256 hashed session tokens, `HttpOnly`, `SameSite=Lax`, `Secure` (in production) cookies, explicit expiration, and instant server-side revocation.
-
-### 4.2 Private Document Storage
-- Uploaded files are stored **outside** the Next.js `public/` and source directories (e.g., `./storage/uploads` locally, `/var/lib/akatalife/uploads` in Docker volume).
-- **Upload Validation Pipeline:**
-  1. Verify active user session.
-  2. Enforce maximum file size (default 25 MB).
-  3. Validate file extension and declared MIME type (`application/pdf`, `image/jpeg`, `image/png`, `image/webp`).
-  4. Verify file magic bytes (file signature header) to prevent disguised executables or HTML/SVG XSS payloads.
-  5. Generate a random UUID storage key (`<uuid>.<ext>`); store original filename only as sanitized metadata in PostgreSQL.
-- **Download & Preview Pipeline:**
-  - Served exclusively through an authenticated route (`/api/documents/[id]/file`) with `Content-Security-Policy: default-src 'none'`, `X-Content-Type-Options: nosniff`, and strict path normalization checks against the storage root.
-
----
-
-## 5. Relational Data Model Summary
+## 5. Relational Data Model Summary (Supabase PostgreSQL)
 
 ```mermaid
 erDiagram
     User ||--o{ Session : has
-    User ||--o{ Authenticator : configures
+    User ||--o{ AgentApiKey : authorizes
     User ||--o{ Contract : owns
     User ||--o{ Document : uploads
     User ||--o{ Category : customizes
@@ -79,7 +82,7 @@ erDiagram
     User ||--o{ RecurringRule : schedules
     User ||--o{ Reminder : creates
     User ||--o{ Property : manages
-    User ||--o{ AuditEvent : triggers
+    User ||--o{ AuditEvent : logs
 
     Contract ||--o{ Document : attachments
     Contract ||--o{ Invoice : bills
@@ -91,47 +94,3 @@ erDiagram
     HouseholdAsset ||--o{ MaintenanceRecord : logs
     HouseholdAsset ||--o{ Document : manuals_receipts
 ```
-
----
-
-## 6. Directory Structure
-
-```text
-akatalife/
-├── MASTER_PROMPT.md          # Complete project specification
-├── ROADMAP.md                # Living milestone tracker
-├── ARCHITECTURE.md           # Technical architecture & design decisions
-├── SECURITY.md               # Security controls, threat model, secret handling
-├── DEPLOYMENT.md             # VPS inspection & Docker Compose deployment guide
-├── BACKUP_RESTORE.md         # Backup automation & verified restore runbook
-├── prisma/
-│   ├── schema.prisma         # Normalized relational schema
-│   ├── migrations/           # Version-controlled SQL migrations
-│   └── seed.ts               # Development-only seed script
-├── src/
-│   ├── app/                  # Next.js App Router pages & API routes
-│   ├── components/           # Accessible UI & domain components
-│   ├── lib/
-│   │   ├── auth/             # Session, Argon2id, TOTP, rate-limiter, guards
-│   │   ├── db/               # Prisma singleton client
-│   │   ├── finance/          # Integer-cent / Decimal arithmetic & deadline calculators
-│   │   ├── format/           # German/Turkish date & EUR currency formatters
-│   │   ├── i18n/             # Dedicated de.ts and tr.ts localization dictionaries
-│   │   └── storage/          # Secure private document storage & magic-byte validator
-│   └── types/                # Shared strict TypeScript definitions
-├── tests/
-│   ├── unit/                 # Vitest unit & domain logic tests
-│   └── e2e/                  # Playwright end-to-end user journey tests
-├── scripts/
-│   ├── backup.sh             # PostgreSQL + uploads backup with SHA-256 manifest
-│   └── restore.sh            # Verified restore script
-├── Dockerfile                # Multi-stage production container
-└── docker-compose.yml        # Local & production container orchestration
-```
-
----
-
-## 7. Unresolved Environment & Deployment Questions (To Confirm Before Milestone 5)
-
-1. **Local Development Runtime:** Does this macOS machine have Node.js / Homebrew / Docker installed outside the default sandbox paths (`/opt/homebrew`), or should we verify tool access outside the sandbox first?
-2. **VPS Target (Milestone 5):** When we reach Milestone 5, we will inspect your VPS non-destructively to confirm the Linux distribution, existing reverse proxy (Nginx, Caddy, or Traefik), available ports, and domain name. No production infrastructure will be touched until then.

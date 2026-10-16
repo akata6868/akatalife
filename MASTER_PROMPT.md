@@ -822,3 +822,31 @@ The first release is complete only when:
 - Known limitations are explicitly documented.
 
 Begin with workspace inspection and the technical plan. Then implement the first milestone and demonstrate the working result. Prioritize security, correctness, maintainability, and a reliable foundation over unnecessary complexity.
+
+
+---
+
+## 24. Architecture & Infrastructure Addendum (Coolify + Supabase + Hermes Agent)
+
+Per owner requirements:
+
+1. **GitHub & Coolify Deployment:**
+   - Source code is hosted on GitHub and deployed automatically or on-demand via **Coolify** (using the repository's `Dockerfile` and healthcheck `/api/health`).
+   - Environment variables are managed securely in Coolify's environment configuration.
+
+2. **Supabase PostgreSQL Database:**
+   - Primary database is **Supabase PostgreSQL** (`DATABASE_URL` for pooled runtime connections and `DIRECT_URL` for Prisma schema migrations).
+   - Document storage supports both a persistent Coolify storage volume (`STORAGE_DIR`) and Supabase Storage buckets.
+
+3. **Hermes Agent Full API Access (`/api/v1/agent/*`):**
+   - **Hermes Agent** has full programmatic access to Akata Life via a dedicated, authenticated REST & Tool API (`/api/v1/agent/*`) plus a machine-readable OpenAPI/Tool manifest (`/api/v1/agent/openapi.json`).
+   - Authentication uses a high-entropy bearer token (`HERMES_AGENT_API_KEY` / hashed API keys stored in the database) passed via `Authorization: Bearer <token>` or `X-Hermes-Api-Key`.
+   - Capabilities exposed to Hermes Agent:
+     - Read complete dashboard & financial summaries (`/api/v1/agent/summary`)
+     - Full CRUD on Contracts (`/api/v1/agent/contracts`)
+     - Full CRUD & metadata search on Documents (`/api/v1/agent/documents`)
+     - Full CRUD on Income, Expenses, and Categories (`/api/v1/agent/transactions`, `/api/v1/agent/categories`)
+     - Full CRUD on Invoices & Recurring Bills (`/api/v1/agent/invoices`)
+     - Full CRUD on Reminders & Deadlines (`/api/v1/agent/reminders`)
+     - Full CRUD on My Home / Rooms / Assets / Maintenance (`/api/v1/agent/home`)
+   - Every operation performed by Hermes Agent is recorded in `AuditEvent` (`actorType: "HERMES_AGENT"`) for transparency and traceability.
