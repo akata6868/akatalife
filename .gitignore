@@ -19,6 +19,7 @@ next-env.d.ts
 /uploads/
 /backups/
 *.sql
+!prisma/migrations/**/*.sql
 *.sql.gz
 *.dump
 *.pem
