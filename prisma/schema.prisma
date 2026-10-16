@@ -1,0 +1,543 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================================================
+// 1. AUTHENTICATION, SESSIONS, HERMES AGENT API KEYS & AUDIT TRAIL
+// ============================================================================
+
+enum UserRole {
+  OWNER
+  MEMBER
+}
+
+enum ActorType {
+  USER
+  HERMES_AGENT
+  SYSTEM
+}
+
+model User {
+  id                  String    @id @default(cuid())
+  email               String    @unique
+  name                String
+  passwordHash        String
+  role                UserRole  @default(OWNER)
+  locale              String    @default("de")
+  theme               String    @default("system")
+  totpEnabled         Boolean   @default(false)
+  totpSecretEncrypted String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  sessions            Session[]
+  agentApiKeys        AgentApiKey[]
+  contracts           Contract[]
+  documents           Document[]
+  categories          Category[]
+  transactions        Transaction[]
+  budgets             Budget[]
+  invoices            Invoice[]
+  recurringRules      RecurringRule[]
+  reminders           Reminder[]
+  properties          Property[]
+  auditEvents         AuditEvent[]
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  tokenHash    String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ipAddress    String?
+  userAgent    String?
+  mfaVerified  Boolean  @default(false)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AgentApiKey {
+  id          String    @id @default(cuid())
+  name        String    @default("Hermes Agent")
+  keyPrefix   String
+  keyHash     String    @unique
+  scopes      String[]  @default(["*"])
+  active      Boolean   @default(true)
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model AuditEvent {
+  id         String    @id @default(cuid())
+  actorType  ActorType @default(USER)
+  actorLabel String
+  action     String
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  userId     String?
+  user       User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt  DateTime  @default(now())
+
+  @@index([createdAt])
+  @@index([actorType])
+  @@index([entityType, entityId])
+}
+
+model ApplicationSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================================================
+// 2. CONTRACTS (VERTRÄGE)
+// ============================================================================
+
+enum ContractCategory {
+  ELECTRICITY
+  GAS
+  WATER
+  INTERNET
+  MOBILE
+  INSURANCE
+  RENT
+  VEHICLE_INSURANCE
+  VEHICLE_FINANCING
+  SUBSCRIPTION
+  OTHER
+}
+
+enum BillingFrequency {
+  MONTHLY
+  QUARTERLY
+  SEMI_ANNUAL
+  ANNUAL
+  ONE_TIME
+}
+
+enum ContractStatus {
+  ACTIVE
+  CANCELLATION_PLANNED
+  CANCELLED
+  EXPIRED
+  ARCHIVED
+}
+
+model Contract {
+  id                   String           @id @default(cuid())
+  provider             String
+  title                String
+  category             ContractCategory
+  contractNumber       String?
+  startDate            DateTime
+  minimumTermMonths    Int?
+  noticePeriodDays     Int?
+  cancellationDeadline DateTime?
+  renewalDate          DateTime?
+  amountCents          Int              // Stored in integer EUR cents (e.g., 4990 = 49,90 €)
+  currency             String           @default("EUR")
+  billingFrequency     BillingFrequency @default(MONTHLY)
+  paymentMethod        String?
+  status               ContractStatus   @default(ACTIVE)
+  contactName          String?
+  contactEmail         String?
+  contactPhone         String?
+  contactWebsite       String?
+  notes                String?
+  reminderDaysBefore   Int              @default(30)
+  archivedAt           DateTime?
+  userId               String
+  user                 User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  documents            Document[]
+  invoices             Invoice[]
+  transactions         Transaction[]
+  recurringRules       RecurringRule[]
+  reminders            Reminder[]
+
+  @@index([userId, status])
+  @@index([cancellationDeadline])
+  @@index([category])
+}
+
+// ============================================================================
+// 3. PRIVATE DOCUMENT LIBRARY (DOKUMENTE)
+// ============================================================================
+
+enum DocumentCategory {
+  CONTRACT
+  UTILITY_BILL
+  TELECOM_BILL
+  INSURANCE
+  RENT_HOUSING
+  EMPLOYMENT_PAYSLIP
+  TAX
+  PUBLIC_ADMIN_JOBCENTER
+  VEHICLE
+  WARRANTY_RECEIPT
+  OTHER
+}
+
+model Document {
+  id               String           @id @default(cuid())
+  title            String
+  originalFilename String
+  storageKey       String           @unique
+  category         DocumentCategory @default(OTHER)
+  mimeType         String
+  sizeBytes        Int
+  sha256Hash       String
+  issueDate        DateTime?
+  dueDate          DateTime?
+  amountCents      Int?
+  currency         String           @default("EUR")
+  tags             String[]         @default([])
+  notes            String?
+  archivedAt       DateTime?
+
+  contractId       String?
+  contract         Contract?        @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  assetId          String?
+  asset            HouseholdAsset?  @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  userId           String
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  invoices         Invoice[]
+  transactions     Transaction[]
+  reminders        Reminder[]
+
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([userId, category])
+  @@index([contractId])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// 4. HOUSEHOLD FINANCES (FINANZEN, EINNAHMEN, AUSGABEN, BUDGETS)
+// ============================================================================
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum TransactionStatus {
+  PLANNED
+  RECORDED
+  CONFIRMED
+}
+
+model Category {
+  id           String          @id @default(cuid())
+  slug         String
+  nameDe       String
+  nameTr       String
+  type         TransactionType
+  color        String          @default("#0f766e")
+  icon         String          @default("Wallet")
+  isSystem     Boolean         @default(false)
+  userId       String
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime        @default(now())
+
+  transactions   Transaction[]
+  budgets        Budget[]
+  recurringRules RecurringRule[]
+
+  @@unique([userId, slug])
+  @@index([userId, type])
+}
+
+model Transaction {
+  id              String            @id @default(cuid())
+  description     String
+  amountCents     Int               // Positive integer EUR cents
+  currency        String            @default("EUR")
+  transactionDate DateTime
+  type            TransactionType
+  status          TransactionStatus @default(RECORDED)
+  paymentSource   String?
+  notes           String?
+
+  categoryId      String
+  category        Category          @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  contractId      String?
+  contract        Contract?         @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  invoiceId       String?
+  invoice         Invoice?          @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  documentId      String?
+  document        Document?         @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  recurringRuleId String?
+  recurringRule   RecurringRule?    @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
+
+  userId          String
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([userId, transactionDate])
+  @@index([userId, type, status])
+  @@index([categoryId])
+}
+
+model Budget {
+  id          String    @id @default(cuid())
+  year        Int
+  month       Int       // 1..12
+  amountCents Int
+  currency    String    @default("EUR")
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userId, year, month, categoryId])
+}
+
+// ============================================================================
+// 5. INVOICES & RECURRING BILLS (RECHNUNGEN)
+// ============================================================================
+
+enum InvoiceStatus {
+  PLANNED
+  UNPAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum RecurringTargetType {
+  TRANSACTION
+  INVOICE
+}
+
+model Invoice {
+  id              String         @id @default(cuid())
+  description     String
+  provider        String
+  invoiceNumber   String?
+  invoiceDate     DateTime
+  dueDate         DateTime
+  amountCents     Int
+  currency        String         @default("EUR")
+  status          InvoiceStatus  @default(UNPAID)
+  paidAt          DateTime?
+  notes           String?
+
+  contractId      String?
+  contract        Contract?      @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  documentId      String?
+  document        Document?      @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  recurringRuleId String?
+  recurringRule   RecurringRule? @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
+
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  transactions    Transaction[]
+  reminders       Reminder[]
+
+  @@index([userId, status, dueDate])
+  @@index([contractId])
+}
+
+model RecurringRule {
+  id           String              @id @default(cuid())
+  title        String
+  provider     String?
+  amountCents  Int
+  currency     String              @default("EUR")
+  frequency    BillingFrequency    @default(MONTHLY)
+  dayOfMonth   Int                 @default(1) // 1..28
+  nextRunDate  DateTime
+  active       Boolean             @default(true)
+  targetType   RecurringTargetType @default(INVOICE)
+  transactionType TransactionType  @default(EXPENSE)
+
+  contractId   String?
+  contract     Contract?           @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  categoryId   String?
+  category     Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  userId       String
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  transactions Transaction[]
+  invoices     Invoice[]
+
+  @@index([userId, active, nextRunDate])
+}
+
+// ============================================================================
+// 6. CALENDAR & REMINDERS (TERMINE & ERINNERUNGEN)
+// ============================================================================
+
+enum ReminderPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Reminder {
+  id             String           @id @default(cuid())
+  title          String
+  description    String?
+  dueAt          DateTime
+  priority       ReminderPriority @default(MEDIUM)
+  completedAt    DateTime?
+  repeatInterval String?          // NONE, MONTHLY, YEARLY
+  dedupeKey      String?          @unique // Prevents duplicate auto-generated reminders
+
+  contractId     String?
+  contract       Contract?        @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  invoiceId      String?
+  invoice        Invoice?         @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  documentId     String?
+  document       Document?        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  assetId        String?
+  asset          HouseholdAsset?  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  userId         String
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([userId, completedAt, dueAt])
+}
+
+// ============================================================================
+// 7. MY HOME (MEIN ZUHAUSE) & HOME ASSISTANT CONFIG
+// ============================================================================
+
+model Property {
+  id              String         @id @default(cuid())
+  name            String
+  address         String?
+  propertyType    String         @default("RENTAL") // RENTAL, OWNED
+  areaSqm         Float?
+  landlordName    String?
+  landlordContact String?
+  moveInDate      DateTime?
+  notes           String?
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  rooms           Room[]
+  assets          HouseholdAsset[]
+  meterReadings   MeterReading[]
+}
+
+model Room {
+  id         String           @id @default(cuid())
+  name       String
+  floor      String?
+  areaSqm    Float?
+  notes      String?
+  propertyId String
+  property   Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  createdAt  DateTime         @default(now())
+
+  assets     HouseholdAsset[]
+}
+
+model HouseholdAsset {
+  id                 String              @id @default(cuid())
+  name               String
+  category           String              // APPLIANCE, ELECTRONICS, FURNITURE, HEATING, OTHER
+  brand              String?
+  modelNumber        String?
+  serialNumber       String?
+  purchaseDate       DateTime?
+  purchasePriceCents Int?
+  warrantyUntil      DateTime?
+  notes              String?
+
+  propertyId         String
+  property           Property            @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  roomId             String?
+  room               Room?               @relation(fields: [roomId], references: [id], onDelete: SetNull)
+
+  documents          Document[]
+  maintenanceRecords MaintenanceRecord[]
+  reminders          Reminder[]
+
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+}
+
+model MaintenanceRecord {
+  id            String         @id @default(cuid())
+  title         String
+  performedAt   DateTime
+  nextDueAt     DateTime?
+  costCents     Int?
+  performedBy   String?
+  notes         String?
+  assetId       String
+  asset         HouseholdAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  createdAt     DateTime       @default(now())
+}
+
+enum MeterType {
+  ELECTRICITY
+  GAS
+  WATER
+  HEATING
+}
+
+model MeterReading {
+  id          String    @id @default(cuid())
+  meterType   MeterType
+  meterNumber String?
+  readingValue Float
+  unit        String    // kWh, m3
+  readingDate DateTime
+  notes       String?
+  propertyId  String
+  property    Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@index([propertyId, meterType, readingDate])
+}
+
+model HomeAssistantConfig {
+  id                  String    @id @default("singleton")
+  enabled             Boolean   @default(false)
+  baseUrl             String?
+  tokenEncrypted      String?
+  selectedSensors     Json?     // Array of { entityId, labelDe, labelTr, category, unit }
+  electricityPriceCentsPerKwh Int?
+  gasPriceCentsPerKwh         Int?
+  lastSyncAt          DateTime?
+  lastSyncError       String?
+  updatedAt           DateTime  @updatedAt
+}

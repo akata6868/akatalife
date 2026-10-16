@@ -1,0 +1,11 @@
+{
+  "name": "Akata Life",
+  "short_name": "Akata Life",
+  "description": "Privates Haushalts-, Vertrags-, Finanz- & Dokumentenmanagement",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#0f766e",
+  "orientation": "portrait-primary",
+  "lang": "de-DE"
+}
