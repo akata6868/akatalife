@@ -1,4 +1,5 @@
-import { prisma } from "@/lib/db/prisma";
+import crypto from "crypto";
+import { executeSupabaseSql } from "@/lib/db/prisma";
 
 export const DEFAULT_HOUSEHOLD_CATEGORIES = [
   // Income Categories
@@ -25,24 +26,21 @@ export const DEFAULT_HOUSEHOLD_CATEGORIES = [
 ];
 
 export async function ensureDefaultCategoriesForUser(userId: string) {
-  for (const cat of DEFAULT_HOUSEHOLD_CATEGORIES) {
-    await prisma.category.upsert({
-      where: {
-        userId_slug: {
-          userId,
-          slug: cat.slug,
-        },
-      },
-      update: {},
-      create: {
-        userId,
-        slug: cat.slug,
-        nameDe: cat.nameDe,
-        nameTr: cat.nameTr,
-        type: cat.type,
-        color: cat.color,
-        isSystem: true,
-      },
-    });
-  }
+  const safeUser = userId.replace(/'/g, "''");
+  const values = DEFAULT_HOUSEHOLD_CATEGORIES.map((cat) => {
+    const id = "c" + crypto.randomBytes(12).toString("hex");
+    const slug = cat.slug.replace(/'/g, "''");
+    const nameDe = cat.nameDe.replace(/'/g, "''");
+    const nameTr = cat.nameTr.replace(/'/g, "''");
+    const color = cat.color.replace(/'/g, "''");
+    return `('${id}', '${slug}', '${nameDe}', '${nameTr}', '${cat.type}', '${color}', 'Wallet', TRUE, '${safeUser}', NOW())`;
+  }).join(",\n");
+
+  const sql = `
+    INSERT INTO akatalife."Category" ("id", "slug", "nameDe", "nameTr", "type", "color", "icon", "isSystem", "userId", "createdAt")
+    VALUES ${values}
+    ON CONFLICT ("userId", "slug") DO NOTHING;
+  `;
+
+  await executeSupabaseSql(sql);
 }
