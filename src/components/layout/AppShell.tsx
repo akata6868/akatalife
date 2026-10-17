@@ -84,9 +84,31 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
   const t = dictionaries[locale];
   const isLoginPage = pathname === "/login";
 
-  // Register Service Worker, check Notification permission & capture PWA install prompt
+  // Load persisted Language (DE/TR) & Theme (Light/Dark/System) + register SW & PWA install
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    const applySavedPreferences = () => {
+      try {
+        const savedLocale = localStorage.getItem("akatalife_locale");
+        if (savedLocale === "de" || savedLocale === "tr") {
+          setLocale(savedLocale);
+          document.documentElement.lang = savedLocale;
+        }
+        const savedTheme = localStorage.getItem("akatalife_theme");
+        const prefersDark = window.matchMedia(
+          "(prefers-color-scheme: dark)"
+        ).matches;
+        const isDark =
+          savedTheme === "dark" ||
+          (savedTheme === "system" && prefersDark);
+        setDark(isDark);
+        document.documentElement.classList.toggle("dark", isDark);
+      } catch {}
+    };
+
+    applySavedPreferences();
+
     if ("Notification" in window) {
       setNotifPermission(Notification.permission);
     }
@@ -103,8 +125,14 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
       setDeferredInstallPrompt(e);
     };
     window.addEventListener("beforeinstallprompt", onBeforeInstall);
-    return () =>
+    window.addEventListener("akatalife-prefs-changed", applySavedPreferences);
+    return () => {
       window.removeEventListener("beforeinstallprompt", onBeforeInstall);
+      window.removeEventListener(
+        "akatalife-prefs-changed",
+        applySavedPreferences
+      );
+    };
   }, []);
 
   useEffect(() => {
@@ -310,12 +338,28 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
     }
   }
 
+  const changeLocale = (nextLocale: Locale) => {
+    setLocale(nextLocale);
+    try {
+      localStorage.setItem("akatalife_locale", nextLocale);
+      document.cookie = `akatalife_locale=${nextLocale}; path=/; max-age=31536000`;
+      document.documentElement.lang = nextLocale;
+      window.dispatchEvent(new Event("akatalife-prefs-changed"));
+    } catch {}
+  };
+
   const toggleTheme = () => {
     const nextDark = !dark;
     setDark(nextDark);
-    if (typeof document !== "undefined") {
-      document.documentElement.classList.toggle("dark", nextDark);
-    }
+    try {
+      const mode = nextDark ? "dark" : "light";
+      localStorage.setItem("akatalife_theme", mode);
+      document.cookie = `akatalife_theme=${mode}; path=/; max-age=31536000`;
+      if (typeof document !== "undefined") {
+        document.documentElement.classList.toggle("dark", nextDark);
+      }
+      window.dispatchEvent(new Event("akatalife-prefs-changed"));
+    } catch {}
   };
 
   async function handleLogout() {
@@ -537,7 +581,8 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
         <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
           <button
             type="button"
-            onClick={() => setLocale(locale === "de" ? "tr" : "de")}
+            onClick={() => changeLocale(locale === "de" ? "tr" : "de")}
+            title="Dil Seçimi (Kalıcı Kaydedilir)"
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
           >
             <Globe className="w-3.5 h-3.5" />
@@ -546,10 +591,21 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
           <button
             type="button"
             onClick={toggleTheme}
+            title="Gece / Gündüz Modu (Kalıcı Kaydedilir)"
             aria-label="Toggle Theme"
-            className="p-2 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
           >
-            {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            {dark ? (
+              <>
+                <Sun className="w-3.5 h-3.5 text-amber-400" />
+                <span>Gündüz</span>
+              </>
+            ) : (
+              <>
+                <Moon className="w-3.5 h-3.5 text-slate-600" />
+                <span>Gece</span>
+              </>
+            )}
           </button>
           <button
             type="button"
@@ -744,6 +800,42 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
                 })}
               </nav>
             </div>
+
+            <div className="pt-4 mt-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => changeLocale(locale === "de" ? "tr" : "de")}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-100 dark:bg-slate-800"
+              >
+                <Globe className="w-3.5 h-3.5" />
+                {locale === "de" ? "DE" : "TR"}
+              </button>
+              <button
+                type="button"
+                onClick={toggleTheme}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-100 dark:bg-slate-800"
+              >
+                {dark ? (
+                  <>
+                    <Sun className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Gündüz</span>
+                  </>
+                ) : (
+                  <>
+                    <Moon className="w-3.5 h-3.5" />
+                    <span>Gece</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                Exit
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -789,7 +881,7 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
             </button>
             <button
               type="button"
-              onClick={() => setLocale(locale === "de" ? "tr" : "de")}
+              onClick={() => changeLocale(locale === "de" ? "tr" : "de")}
               className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800"
             >
               {locale.toUpperCase()}

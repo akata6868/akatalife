@@ -1,5 +1,5 @@
-import FinancesPage from "@/app/finances/page";
+import { FinancesView } from "@/app/finances/page";
 
 export default function ExpensesPage() {
-  return <FinancesPage />;
+  return <FinancesView lockedMode="EXPENSE" />;
 }
