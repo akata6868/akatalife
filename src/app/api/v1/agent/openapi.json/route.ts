@@ -196,6 +196,28 @@ export async function GET() {
           summary: "Delete a savings recommendation or wealth goal.",
         },
       },
+      "/api/v1/agent/reports": {
+        get: {
+          operationId: "listReportsAndLiveAnalytics",
+          summary:
+            "Get real-time financial & contract analytics and list all saved Hermes Agent reports.",
+        },
+        post: {
+          operationId: "createReport",
+          summary:
+            "Create a new monthly, annual, contract, or savings report (MONTHLY, ANNUAL, SAVINGS_ANALYSIS, CONTRACT_REVIEW, CUSTOM).",
+        },
+      },
+      "/api/v1/agent/reports/{id}": {
+        patch: {
+          operationId: "updateReport",
+          summary: "Update an existing report.",
+        },
+        delete: {
+          operationId: "deleteReport",
+          summary: "Delete a report.",
+        },
+      },
       "/api/v1/agent/audit": {
         get: {
           operationId: "listAuditEvents",
