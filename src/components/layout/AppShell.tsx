@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   FileSignature,
@@ -21,6 +21,7 @@ import {
   Moon,
   Globe,
   Bot,
+  LogOut,
 } from "lucide-react";
 import { dictionaries, Locale } from "@/lib/i18n/dictionaries";
 
@@ -31,9 +32,35 @@ interface AppShellProps {
 
 export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const [locale, setLocale] = useState<Locale>(initialLocale);
   const [dark, setDark] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const t = dictionaries[locale];
+
+  const isLoginPage = pathname === "/login";
+
+  useEffect(() => {
+    if (isLoginPage) {
+      setAuthChecked(true);
+      return;
+    }
+    setAuthChecked(false);
+    fetch("/api/auth/me")
+      .then(async (res) => {
+        if (!res.ok) {
+          router.replace("/login");
+          return;
+        }
+        const data = await res.json();
+        setUserEmail(data.user?.email ?? null);
+        setAuthChecked(true);
+      })
+      .catch(() => {
+        router.replace("/login");
+      });
+  }, [isLoginPage, pathname, router]);
 
   const toggleTheme = () => {
     const nextDark = !dark;
@@ -42,6 +69,30 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
       document.documentElement.classList.toggle("dark", nextDark);
     }
   };
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.replace("/login");
+    router.refresh();
+  }
+
+  // Render clean standalone layout on /login without sidebar or navigation
+  if (isLoginPage) {
+    return (
+      <div className="min-h-screen flex flex-col justify-center bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-4">
+        {children}
+      </div>
+    );
+  }
+
+  // Block rendering protected UI until database session is verified
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-500 text-xs font-medium">
+        Sitzung wird überprüft…
+      </div>
+    );
+  }
 
   const navItems = [
     { href: "/", label: t.nav.dashboard, icon: LayoutDashboard, active: true },
@@ -53,7 +104,7 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
     { href: "/invoices", label: t.nav.invoices, icon: Receipt, active: true },
     { href: "/reminders", label: t.nav.reminders, icon: Bell, active: true },
     { href: "/home", label: t.nav.home, icon: Home, active: true },
-    { href: "/energy", label: t.nav.energy, icon: Cpu, active: false },
+    { href: "/energy", label: t.nav.energy, icon: Cpu, active: true },
     { href: "/reports", label: t.nav.reports, icon: BarChart3, active: true },
     { href: "/settings", label: t.nav.settings, icon: Settings, active: true },
     { href: "/system", label: t.nav.system, icon: ShieldCheck, active: true },
@@ -68,8 +119,8 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
             <span className="text-lg font-bold tracking-tight text-teal-700 dark:text-teal-400">
               {t.appName}
             </span>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Europe/Berlin · EUR
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate max-w-[140px]">
+              {userEmail || "Europe/Berlin · EUR"}
             </p>
           </div>
           <span
@@ -99,11 +150,6 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
                   <Icon className="w-4 h-4 shrink-0" />
                   <span>{item.label}</span>
                 </span>
-                {!item.active && (
-                  <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">
-                    M6
-                  </span>
-                )}
               </Link>
             );
           })}
@@ -113,10 +159,10 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
           <button
             type="button"
             onClick={() => setLocale(locale === "de" ? "tr" : "de")}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
           >
             <Globe className="w-3.5 h-3.5" />
-            {locale === "de" ? "DE · Deutsch" : "TR · Türkçe"}
+            {locale === "de" ? "DE" : "TR"}
           </button>
           <button
             type="button"
@@ -125,6 +171,15 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
             className="p-2 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
           >
             {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={handleLogout}
+            title="Abmelden"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 hover:bg-rose-100"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Exit
           </button>
         </div>
       </aside>
@@ -136,10 +191,6 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
           <div className="flex items-center gap-2">
             <span className="font-bold text-base text-teal-700 dark:text-teal-400">
               {t.appName}
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-full bg-teal-50 dark:bg-teal-950 px-2 py-0.5 text-[10px] font-medium text-teal-700 dark:text-teal-300">
-              <Bot className="w-3 h-3" />
-              Hermes API
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -156,6 +207,13 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
               className="p-1.5 rounded bg-slate-100 dark:bg-slate-800"
             >
               {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="p-1.5 rounded bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300"
+            >
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </header>

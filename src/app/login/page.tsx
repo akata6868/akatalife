@@ -1,12 +1,13 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { KeyRound, ShieldCheck, AlertCircle } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
   const [mode, setMode] = useState<"login" | "setup">("login");
+  const [hasOwner, setHasOwner] = useState<boolean>(true);
   const [name, setName] = useState("Süleyman Akata");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -16,6 +17,25 @@ export default function LoginPage() {
     null
   );
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.authenticated) {
+          router.replace("/");
+          return;
+        }
+        if (data.hasOwner === false) {
+          setHasOwner(false);
+          setMode("setup");
+        } else {
+          setHasOwner(true);
+          setMode("login");
+        }
+      })
+      .catch(() => {});
+  }, [router]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -37,7 +57,7 @@ export default function LoginPage() {
         if (!res.ok) {
           setError(data.message || "Anmeldung fehlgeschlagen.");
         } else {
-          router.push("/");
+          router.replace("/");
           router.refresh();
         }
       } else {
@@ -61,7 +81,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="max-w-md mx-auto mt-8 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-6 shadow-sm">
+    <div className="w-full max-w-md mx-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-6 shadow-sm">
       <div className="space-y-1">
         <h1 className="text-xl font-bold flex items-center gap-2">
           <KeyRound className="w-5 h-5 text-teal-600" />
@@ -74,30 +94,32 @@ export default function LoginPage() {
         </p>
       </div>
 
-      <div className="flex gap-2 p-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-xs font-medium">
-        <button
-          type="button"
-          onClick={() => setMode("login")}
-          className={`flex-1 py-1.5 rounded-md ${
-            mode === "login"
-              ? "bg-white dark:bg-slate-900 shadow-sm font-semibold"
-              : "text-slate-500"
-          }`}
-        >
-          Anmelden (Login)
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("setup")}
-          className={`flex-1 py-1.5 rounded-md ${
-            mode === "setup"
-              ? "bg-white dark:bg-slate-900 shadow-sm font-semibold"
-              : "text-slate-500"
-          }`}
-        >
-          Erstinstallation (Setup)
-        </button>
-      </div>
+      {!hasOwner && (
+        <div className="flex gap-2 p-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-xs font-medium">
+          <button
+            type="button"
+            onClick={() => setMode("login")}
+            className={`flex-1 py-1.5 rounded-md ${
+              mode === "login"
+                ? "bg-white dark:bg-slate-900 shadow-sm font-semibold"
+                : "text-slate-500"
+            }`}
+          >
+            Anmelden (Login)
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("setup")}
+            className={`flex-1 py-1.5 rounded-md ${
+              mode === "setup"
+                ? "bg-white dark:bg-slate-900 shadow-sm font-semibold"
+                : "text-slate-500"
+            }`}
+          >
+            Erstinstallation (Setup)
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="rounded-lg border border-rose-300 bg-rose-50 dark:bg-rose-950/50 p-3 text-xs text-rose-800 dark:text-rose-200 flex items-center gap-2">
@@ -120,7 +142,7 @@ export default function LoginPage() {
           </pre>
           <button
             type="button"
-            onClick={() => router.push("/")}
+            onClick={() => router.replace("/")}
             className="w-full py-2 rounded-lg bg-teal-700 text-white text-xs font-semibold"
           >
             Weiter zum Dashboard →
