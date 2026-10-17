@@ -155,8 +155,24 @@ export async function fetchHomeAssistantSensors(params: {
         };
       }
 
-      // Filter to preferred energy/climate/household sensors first, then any sensor.* with a unit
-      const prioritized = allStates.filter((item: any) => {
+      // Filter to AVAILABLE preferred energy/climate/household sensors first
+      const isStateAvailable = (item: any) => {
+        const st = String(item?.state ?? "").trim().toLowerCase();
+        return st !== "" && st !== "unavailable" && st !== "unknown";
+      };
+
+      const availableSensors = allStates.filter((item: any) => {
+        const eid = String(item?.entity_id ?? "");
+        return eid.startsWith("sensor.") && isStateAvailable(item);
+      });
+
+      const prioritized = availableSensors.filter((item: any) => {
+        const dc = String(item?.attributes?.device_class ?? "").toLowerCase();
+        const unit = item?.attributes?.unit_of_measurement;
+        return PREFERRED_DEVICE_CLASSES.has(dc) || typeof unit === "string";
+      });
+
+      const fallbackAll = allStates.filter((item: any) => {
         const eid = String(item?.entity_id ?? "");
         if (!eid.startsWith("sensor.")) return false;
         const dc = String(item?.attributes?.device_class ?? "").toLowerCase();
@@ -164,7 +180,14 @@ export async function fetchHomeAssistantSensors(params: {
         return PREFERRED_DEVICE_CLASSES.has(dc) || typeof unit === "string";
       });
 
-      const chosen = (prioritized.length > 0 ? prioritized : allStates.slice(0, 24)).slice(0, 24);
+      const chosen = (
+        prioritized.length > 0
+          ? prioritized
+          : availableSensors.length > 0
+            ? availableSensors
+            : fallbackAll
+      ).slice(0, 24);
+
       for (const raw of chosen) {
         sensors.push(parseHomeAssistantStatePayload(raw));
       }
@@ -195,6 +218,15 @@ export async function fetchHomeAssistantSensors(params: {
           cache: "no-store",
         }
       );
+
+      if (res.status === 401 || res.status === 403) {
+        return {
+          ok: false,
+          syncedAt: new Date().toISOString(),
+          sensors: [],
+          error: `Home Assistant kimlik doğrulama hatası (HTTP ${res.status}). Lütfen Long-Lived Access Token (eyJ... ile başlayan uzun token) bilginizi kontrol edin.`,
+        };
+      }
 
       if (!res.ok) {
         sensors.push({

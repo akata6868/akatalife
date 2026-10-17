@@ -239,13 +239,17 @@ export default function EnergyPage() {
               )}
             </div>
             <input
-              type="password"
+              type="text"
+              name="ha_long_lived_jwt_token"
+              autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore="true"
               value={token}
               onChange={(e) => setToken(e.target.value)}
               placeholder={
                 hasToken
-                  ? "Kayıtlı token mevcut (değiştirmek için yeni girin)…"
-                  : "Home Assistant Long-Lived Token giriniz…"
+                  ? "Kayıtlı token mevcut (değiştirmek için yeni eyJ... token yapıştırın)"
+                  : "Home Assistant Long-Lived Token (eyJ...) giriniz…"
               }
               className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-sm font-mono"
             />
@@ -253,13 +257,24 @@ export default function EnergyPage() {
         </div>
 
         <div>
-          <label className="block text-xs font-medium mb-1">
-            Sensor Entity-IDs (Virgülle ayrılmış — boş bırakırsanız otomatik bulunur)
-          </label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-xs font-medium">
+              Sensor Entity-IDs (Virgülle ayrılmış — boş bırakırsanız çalışan aktif sensörler otomatik bulunur)
+            </label>
+            <button
+              type="button"
+              onClick={() => setEntityListText("")}
+              className="text-[11px] font-semibold text-teal-600 hover:underline cursor-pointer"
+            >
+              Listeyi Temizle (Tüm Aktif Sensörleri Otomatik Bul)
+            </button>
+          </div>
           <input
+            type="text"
+            autoComplete="off"
             value={entityListText}
             onChange={(e) => setEntityListText(e.target.value)}
-            placeholder="Boş bırakabilirsiniz veya: sensor.stromverbrauch_kwh, sensor.wohnzimmer_temperatur"
+            placeholder="Boş bırakıp Kaydet'e basarsanız çalışan tüm sensörler otomatik bulunur…"
             className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-sm font-mono"
           />
         </div>

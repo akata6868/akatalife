@@ -36,23 +36,34 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const config = await prisma.homeAssistantConfig.findUnique({
-      where: { id: "singleton" },
-    });
+    const [config, haPlugin] = await Promise.all([
+      prisma.homeAssistantConfig.findUnique({ where: { id: "singleton" } }),
+      prisma.pluginIntegration.findFirst({ where: { slug: "home-assistant" } }),
+    ]);
 
     const envEnabled = process.env.HOME_ASSISTANT_ENABLED === "true";
-    const enabled = Boolean(config?.enabled || envEnabled);
+    const enabled = Boolean(config?.enabled ?? haPlugin?.enabled ?? envEnabled);
     const baseUrl = normalizeHomeAssistantBaseUrl(
-      config?.baseUrl || process.env.HOME_ASSISTANT_URL || ""
+      config?.baseUrl || haPlugin?.baseUrl || process.env.HOME_ASSISTANT_URL || ""
     );
 
     let token = process.env.HOME_ASSISTANT_TOKEN || "";
-    if (!token && config?.tokenEncrypted) {
+    const candidateCiphertexts = [
+      config?.tokenEncrypted,
+      haPlugin?.apiKeyEncrypted,
+    ].filter(Boolean) as string[];
+
+    for (const cipher of candidateCiphertexts) {
       try {
-        token = decryptSecret(config.tokenEncrypted);
-      } catch {
-        token = "";
-      }
+        const dec = decryptSecret(cipher);
+        if (dec && dec.length >= 40) {
+          token = dec;
+          break;
+        }
+        if (dec && !token) {
+          token = dec;
+        }
+      } catch {}
     }
 
     const selectedEntityIds = parseSelectedEntityIds(config?.selectedSensors);
@@ -61,7 +72,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         enabled,
         configured: Boolean(baseUrl && token),
-        hasToken: Boolean(token || config?.tokenEncrypted),
+        hasToken: Boolean(token),
         baseUrl: baseUrl || null,
         selectedEntityIds,
         lastSyncAtFormattedDe: formatDateTimeDe(config?.lastSyncAt),
@@ -152,13 +163,24 @@ export async function POST(req: NextRequest) {
       ? body.entityIds.map((id: unknown) => String(id).trim()).filter(Boolean)
       : [];
 
-    const existing = await prisma.homeAssistantConfig.findUnique({
-      where: { id: "singleton" },
-    });
+    const [existing, haPlugin] = await Promise.all([
+      prisma.homeAssistantConfig.findUnique({ where: { id: "singleton" } }),
+      prisma.pluginIntegration.findFirst({ where: { slug: "home-assistant" } }),
+    ]);
 
-    const tokenEncrypted = rawToken
+    const fallbackEncrypted =
+      existing?.tokenEncrypted || haPlugin?.apiKeyEncrypted || null;
+
+    // Guard against browser password manager autofilling a short site password (< 40 chars)
+    // when a valid Long-Lived Access Token (JWT ~180 chars) is already stored
+    const isValidNewToken =
+      rawToken &&
+      !rawToken.includes("•") &&
+      (rawToken.length >= 40 || !fallbackEncrypted);
+
+    const tokenEncrypted = isValidNewToken
       ? encryptSecret(rawToken)
-      : (existing?.tokenEncrypted ?? null);
+      : fallbackEncrypted;
 
     await prisma.homeAssistantConfig.upsert({
       where: { id: "singleton" },
@@ -179,9 +201,6 @@ export async function POST(req: NextRequest) {
     });
 
     // Also mirror into PluginIntegration (slug = 'home-assistant') so /plugins and /energy never drift
-    const haPlugin = await prisma.pluginIntegration.findFirst({
-      where: { slug: "home-assistant" },
-    });
     if (haPlugin) {
       await prisma.pluginIntegration.update({
         where: { id: haPlugin.id },
