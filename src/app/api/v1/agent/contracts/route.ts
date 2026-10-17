@@ -7,31 +7,44 @@ import { formatEurCents, parseEurToCents } from "@/lib/finance/money";
 import { calculateContractDeadlines, formatDateDe } from "@/lib/format/date";
 
 const CreateContractSchema = z.object({
-  provider: z.string().min(1).max(160),
+  provider: z.string().min(1).max(160).optional(),
+  providerName: z.string().min(1).max(160).optional(),
   title: z.string().min(1).max(200),
-  category: z.enum([
-    "ELECTRICITY",
-    "GAS",
-    "WATER",
-    "INTERNET",
-    "MOBILE",
-    "INSURANCE",
-    "RENT",
-    "VEHICLE_INSURANCE",
-    "VEHICLE_FINANCING",
-    "SUBSCRIPTION",
-    "OTHER",
-  ]),
+  category: z
+    .enum([
+      "ELECTRICITY",
+      "GAS",
+      "WATER",
+      "INTERNET",
+      "MOBILE",
+      "INSURANCE",
+      "RENT",
+      "HOUSING",
+      "ENERGY",
+      "STREAMING",
+      "FITNESS",
+      "BANKING",
+      "MOBILITY",
+      "VEHICLE_INSURANCE",
+      "VEHICLE_FINANCING",
+      "SUBSCRIPTION",
+      "OTHER",
+    ])
+    .default("OTHER"),
   contractNumber: z.string().max(120).optional().nullable(),
   startDate: z.string(),
   minimumTermMonths: z.number().int().min(0).max(600).optional().nullable(),
   noticePeriodDays: z.number().int().min(0).max(3650).optional().nullable(),
   explicitRenewalDate: z.string().optional().nullable(),
+  endDate: z.string().optional().nullable(),
   amountCents: z.number().int().min(0).optional(),
   amountEur: z.union([z.string(), z.number()]).optional(),
   billingFrequency: z
-    .enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "ANNUAL", "ONE_TIME"])
-    .default("MONTHLY"),
+    .enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "ANNUAL", "YEARLY", "ONE_TIME"])
+    .optional(),
+  billingCycle: z
+    .enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "ANNUAL", "YEARLY", "ONE_TIME"])
+    .optional(),
   paymentMethod: z.string().max(120).optional().nullable(),
   status: z
     .enum([
@@ -48,7 +61,26 @@ const CreateContractSchema = z.object({
   contactWebsite: z.string().max(250).optional().nullable(),
   notes: z.string().max(4000).optional().nullable(),
   reminderDaysBefore: z.number().int().min(1).max(365).default(30),
+  reminderLeadDays: z.number().int().min(1).max(365).optional(),
 });
+
+function normalizeCategory(raw: string): string {
+  const map: Record<string, string> = {
+    HOUSING: "RENT",
+    ENERGY: "ELECTRICITY",
+    STREAMING: "SUBSCRIPTION",
+    FITNESS: "SUBSCRIPTION",
+    BANKING: "OTHER",
+    MOBILITY: "OTHER",
+  };
+  return map[raw] ?? raw;
+}
+
+function normalizeBillingFrequency(raw?: string): "MONTHLY" | "QUARTERLY" | "SEMI_ANNUAL" | "ANNUAL" | "ONE_TIME" {
+  if (!raw) return "MONTHLY";
+  if (raw === "YEARLY") return "ANNUAL";
+  return raw as "MONTHLY" | "QUARTERLY" | "SEMI_ANNUAL" | "ANNUAL" | "ONE_TIME";
+}
 
 export async function GET(req: NextRequest) {
   const actor = await authenticateRequestActor(req);
@@ -65,7 +97,7 @@ export async function GET(req: NextRequest) {
     where: {
       userId: actor.userId,
       ...(status ? { status: status as never } : { archivedAt: null }),
-      ...(category ? { category: category as never } : {}),
+      ...(category ? { category: normalizeCategory(category) as never } : {}),
       ...(q
         ? {
             OR: [
@@ -84,14 +116,30 @@ export async function GET(req: NextRequest) {
     orderBy: [{ cancellationDeadline: "asc" }, { createdAt: "desc" }],
   });
 
+  const now = new Date();
+
   return NextResponse.json({
-    contracts: contracts.map((c) => ({
-      ...c,
-      amountFormattedDe: formatEurCents(c.amountCents, "de"),
-      startDateFormattedDe: formatDateDe(c.startDate),
-      cancellationDeadlineFormattedDe: formatDateDe(c.cancellationDeadline),
-      renewalDateFormattedDe: formatDateDe(c.renewalDate),
-    })),
+    contracts: contracts.map((c) => {
+      const isEndedByDate =
+        c.renewalDate !== null &&
+        new Date(c.renewalDate).getTime() < now.getTime() &&
+        c.status !== "ACTIVE";
+      const isTerminatedOrEnded =
+        c.status === "CANCELLED" ||
+        c.status === "CANCELLATION_PLANNED" ||
+        c.status === "EXPIRED" ||
+        c.status === "ARCHIVED" ||
+        isEndedByDate;
+
+      return {
+        ...c,
+        isTerminatedOrEnded,
+        amountFormattedDe: formatEurCents(c.amountCents, "de"),
+        startDateFormattedDe: formatDateDe(c.startDate),
+        cancellationDeadlineFormattedDe: formatDateDe(c.cancellationDeadline),
+        renewalDateFormattedDe: formatDateDe(c.renewalDate),
+      };
+    }),
   });
 }
 
@@ -111,6 +159,14 @@ export async function POST(req: NextRequest) {
   }
 
   const data = parsed.data;
+  const providerName = (data.provider || data.providerName || "").trim();
+  if (!providerName) {
+    return NextResponse.json(
+      { error: "ValidationError", message: "provider or providerName is required" },
+      { status: 400 }
+    );
+  }
+
   const amountCents =
     typeof data.amountCents === "number"
       ? data.amountCents
@@ -119,8 +175,9 @@ export async function POST(req: NextRequest) {
         : 0;
 
   const startDate = new Date(data.startDate);
-  const explicitRenewalDate = data.explicitRenewalDate
-    ? new Date(data.explicitRenewalDate)
+  const explicitRenewalStr = data.explicitRenewalDate || data.endDate;
+  const explicitRenewalDate = explicitRenewalStr
+    ? new Date(explicitRenewalStr)
     : null;
 
   const { renewalDate, cancellationDeadline } = calculateContractDeadlines({
@@ -130,11 +187,13 @@ export async function POST(req: NextRequest) {
     explicitRenewalDate,
   });
 
+  const reminderDays = data.reminderLeadDays ?? data.reminderDaysBefore ?? 30;
+
   const contract = await prisma.contract.create({
     data: {
-      provider: data.provider,
+      provider: providerName,
       title: data.title,
-      category: data.category,
+      category: normalizeCategory(data.category) as never,
       contractNumber: data.contractNumber ?? null,
       startDate,
       minimumTermMonths: data.minimumTermMonths ?? null,
@@ -142,7 +201,9 @@ export async function POST(req: NextRequest) {
       cancellationDeadline,
       renewalDate,
       amountCents,
-      billingFrequency: data.billingFrequency,
+      billingFrequency: normalizeBillingFrequency(
+        data.billingFrequency || data.billingCycle
+      ),
       paymentMethod: data.paymentMethod ?? null,
       status: data.status,
       contactName: data.contactName ?? null,
@@ -150,16 +211,15 @@ export async function POST(req: NextRequest) {
       contactPhone: data.contactPhone ?? null,
       contactWebsite: data.contactWebsite ?? null,
       notes: data.notes ?? null,
-      reminderDaysBefore: data.reminderDaysBefore,
+      reminderDaysBefore: reminderDays,
       userId: actor.userId,
     },
   });
 
-  // Automatically generate a deduplicated cancellation reminder if cancellationDeadline exists
-  if (cancellationDeadline) {
+  // Automatically generate a deduplicated cancellation reminder if cancellationDeadline exists and contract is ACTIVE
+  if (cancellationDeadline && data.status === "ACTIVE") {
     const reminderDate = new Date(
-      cancellationDeadline.getTime() -
-        data.reminderDaysBefore * 24 * 60 * 60 * 1000
+      cancellationDeadline.getTime() - reminderDays * 24 * 60 * 60 * 1000
     );
     const dedupeKey = `contract-cancel:${contract.id}:${cancellationDeadline.toISOString().slice(0, 10)}`;
     await prisma.reminder.upsert({

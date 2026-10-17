@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { FileSignature, Plus, Calendar, AlertCircle } from "lucide-react";
+import { FileSignature, Plus, Calendar, AlertCircle, Trash2 } from "lucide-react";
 
 interface ContractItem {
   id: string;
@@ -12,10 +12,47 @@ interface ContractItem {
   amountFormattedDe: string;
   billingFrequency: string;
   status: string;
+  isTerminatedOrEnded?: boolean;
   startDateFormattedDe: string;
   cancellationDeadlineFormattedDe: string;
   renewalDateFormattedDe: string;
 }
+
+const STATUS_LABELS: Record<
+  string,
+  { label: string; badgeClass: string; isStruckThrough: boolean }
+> = {
+  ACTIVE: {
+    label: "Aktiv (Aktif)",
+    badgeClass:
+      "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800",
+    isStruckThrough: false,
+  },
+  CANCELLATION_PLANNED: {
+    label: "Kündigung eingereicht (Çıkış Verildi)",
+    badgeClass:
+      "bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800",
+    isStruckThrough: true,
+  },
+  CANCELLED: {
+    label: "Gekündigt (Çıkış Verildi)",
+    badgeClass:
+      "bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800",
+    isStruckThrough: true,
+  },
+  EXPIRED: {
+    label: "Beendet / Abgelaufen (Bitmiş)",
+    badgeClass:
+      "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-300 dark:border-slate-700",
+    isStruckThrough: true,
+  },
+  ARCHIVED: {
+    label: "Archiviert (Bitmiş)",
+    badgeClass:
+      "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-300 dark:border-slate-700",
+    isStruckThrough: true,
+  },
+};
 
 export default function ContractsPage() {
   const [contracts, setContracts] = useState<ContractItem[]>([]);
@@ -30,6 +67,7 @@ export default function ContractsPage() {
   const [startDate, setStartDate] = useState("2026-01-01");
   const [minimumTermMonths, setMinimumTermMonths] = useState("12");
   const [noticePeriodDays, setNoticePeriodDays] = useState("30");
+  const [status, setStatus] = useState("ACTIVE");
 
   async function loadContracts() {
     setLoading(true);
@@ -70,6 +108,7 @@ export default function ContractsPage() {
         startDate,
         minimumTermMonths: parseInt(minimumTermMonths || "12", 10),
         noticePeriodDays: parseInt(noticePeriodDays || "30", 10),
+        status,
       }),
     });
 
@@ -82,9 +121,50 @@ export default function ContractsPage() {
     setProvider("");
     setTitle("");
     setAmountEur("");
+    setStatus("ACTIVE");
     setShowForm(false);
     await loadContracts();
   }
+
+  async function handleStatusChange(contractId: string, newStatus: string) {
+    setError(null);
+    const res = await fetch(`/api/v1/agent/contracts/${contractId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: newStatus }),
+    });
+    if (!res.ok) {
+      setError("Status konnte nicht aktualisiert werden.");
+      return;
+    }
+    await loadContracts();
+  }
+
+  async function handleDelete(contractId: string, contractTitle: string) {
+    if (!window.confirm(`Vertrag "${contractTitle}" wirklich löschen?`)) {
+      return;
+    }
+    setError(null);
+    const res = await fetch(`/api/v1/agent/contracts/${contractId}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      setError("Vertrag konnte nicht gelöscht werden.");
+      return;
+    }
+    await loadContracts();
+  }
+
+  const sortedContracts = [...contracts].sort((a, b) => {
+    const aStruck =
+      Boolean(a.isTerminatedOrEnded) ||
+      (STATUS_LABELS[a.status]?.isStruckThrough ?? false);
+    const bStruck =
+      Boolean(b.isTerminatedOrEnded) ||
+      (STATUS_LABELS[b.status]?.isStruckThrough ?? false);
+    if (aStruck !== bStruck) return aStruck ? 1 : -1;
+    return 0;
+  });
 
   return (
     <div className="space-y-6">
@@ -95,7 +175,7 @@ export default function ContractsPage() {
             Verträge (Sözleşmeler)
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Strom, Gas, Internet, Mobilfunk, Versicherungen, Miete & Abonnements mit automatischer Kündigungsfrist-Berechnung.
+            Strom, Gas, Internet, Mobilfunk, Versicherungen, Miete & Abonnements — gekündigte und beendete Verträge werden durchgestrichen dargestellt.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -226,6 +306,23 @@ export default function ContractsPage() {
                 />
               </div>
             </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">
+                Status (Durum)
+              </label>
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm"
+              >
+                <option value="ACTIVE">Aktiv (Aktif)</option>
+                <option value="CANCELLATION_PLANNED">
+                  Kündigung eingereicht (Çıkış Verildi)
+                </option>
+                <option value="CANCELLED">Gekündigt (Çıkış Verildi / İptal)</option>
+                <option value="EXPIRED">Beendet / Abgelaufen (Bitmiş)</option>
+              </select>
+            </div>
           </div>
           <div className="flex justify-end gap-2">
             <button
@@ -249,7 +346,7 @@ export default function ContractsPage() {
         <div className="p-8 text-center text-sm text-slate-500">
           Verträge werden geladen…
         </div>
-      ) : contracts.length === 0 ? (
+      ) : sortedContracts.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-800 p-10 text-center space-y-2">
           <p className="text-sm font-medium">Noch keine Verträge hinterlegt</p>
           <p className="text-xs text-slate-500">
@@ -265,35 +362,112 @@ export default function ContractsPage() {
                 <th className="px-4 py-3">Kategorie</th>
                 <th className="px-4 py-3">Betrag</th>
                 <th className="px-4 py-3">Kündigungsfrist</th>
-                <th className="px-4 py-3">Verlängerung</th>
-                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Verlängerung / Ende</th>
+                <th className="px-4 py-3">Status (Durum)</th>
+                <th className="px-4 py-3 text-right">Aktion</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-              {contracts.map((c) => (
-                <tr key={c.id}>
-                  <td className="px-4 py-3">
-                    <div className="font-semibold">{c.provider}</div>
-                    <div className="text-xs text-slate-500">{c.title}</div>
-                  </td>
-                  <td className="px-4 py-3 text-xs">{c.category}</td>
-                  <td className="px-4 py-3 font-mono font-medium">
-                    {c.amountFormattedDe}
-                  </td>
-                  <td className="px-4 py-3 text-xs">
-                    <span className="inline-flex items-center gap-1 font-medium text-amber-700 dark:text-amber-400">
-                      <Calendar className="w-3.5 h-3.5" />
-                      {c.cancellationDeadlineFormattedDe}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-xs">{c.renewalDateFormattedDe}</td>
-                  <td className="px-4 py-3 text-xs">
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-medium">
-                      {c.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {sortedContracts.map((c) => {
+                const statusMeta = STATUS_LABELS[c.status] ?? {
+                  label: c.status,
+                  badgeClass:
+                    "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300",
+                  isStruckThrough: false,
+                };
+                const isStruck =
+                  Boolean(c.isTerminatedOrEnded) || statusMeta.isStruckThrough;
+                const textStrikeClass = isStruck
+                  ? "line-through decoration-rose-500/80 dark:decoration-rose-400/80 decoration-2 text-slate-400 dark:text-slate-500"
+                  : "";
+
+                return (
+                  <tr
+                    key={c.id}
+                    className={
+                      isStruck
+                        ? "bg-slate-50/70 dark:bg-slate-900/40 text-slate-400 dark:text-slate-500 transition-colors"
+                        : "hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors"
+                    }
+                  >
+                    <td className="px-4 py-3">
+                      <div className={`font-semibold ${textStrikeClass}`}>
+                        {c.provider}
+                      </div>
+                      <div
+                        className={`text-xs ${
+                          isStruck
+                            ? "line-through decoration-slate-400 text-slate-400 dark:text-slate-500"
+                            : "text-slate-500"
+                        }`}
+                      >
+                        {c.title}
+                      </div>
+                    </td>
+                    <td className={`px-4 py-3 text-xs ${textStrikeClass}`}>
+                      {c.category}
+                    </td>
+                    <td
+                      className={`px-4 py-3 font-mono font-medium ${textStrikeClass}`}
+                    >
+                      {c.amountFormattedDe}
+                    </td>
+                    <td className="px-4 py-3 text-xs">
+                      <span
+                        className={`inline-flex items-center gap-1 font-medium ${
+                          isStruck
+                            ? "line-through text-slate-400 dark:text-slate-500"
+                            : "text-amber-700 dark:text-amber-400"
+                        }`}
+                      >
+                        <Calendar className="w-3.5 h-3.5" />
+                        {c.cancellationDeadlineFormattedDe}
+                      </span>
+                    </td>
+                    <td className={`px-4 py-3 text-xs ${textStrikeClass}`}>
+                      {c.renewalDateFormattedDe}
+                    </td>
+                    <td className="px-4 py-3 text-xs">
+                      <div className="flex flex-col gap-1.5">
+                        <span
+                          className={`inline-flex w-fit items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${statusMeta.badgeClass}`}
+                        >
+                          {statusMeta.label}
+                        </span>
+                        <select
+                          aria-label="Status ändern"
+                          value={c.status}
+                          onChange={(e) =>
+                            handleStatusChange(c.id, e.target.value)
+                          }
+                          className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] text-slate-700 dark:text-slate-300"
+                        >
+                          <option value="ACTIVE">Aktiv (Aktif)</option>
+                          <option value="CANCELLATION_PLANNED">
+                            Çıkış Verildi (Kündigung eingereicht)
+                          </option>
+                          <option value="CANCELLED">
+                            İptal / Çıkış Verildi (Gekündigt)
+                          </option>
+                          <option value="EXPIRED">
+                            Bitmiş (Beendet / Abgelaufen)
+                          </option>
+                        </select>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(c.id, c.title)}
+                        title="Vertrag löschen"
+                        className="inline-flex items-center justify-center p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
