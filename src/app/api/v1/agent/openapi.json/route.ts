@@ -9,6 +9,12 @@ export async function GET() {
       description:
         "Programmatic REST API granting Hermes Agent full read/write access to Contracts, Documents, Household Finances, Invoices, Reminders, Home Inventory, Energy/Home Assistant, and Audit Logs in Akata Life.",
     },
+    servers: [
+      {
+        url: process.env.NEXT_PUBLIC_APP_URL || "https://life.akata.nl",
+        description: "Akata Life Production Server",
+      },
+    ],
     components: {
       securitySchemes: {
         BearerAuth: {
