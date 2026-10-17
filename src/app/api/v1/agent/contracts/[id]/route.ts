@@ -3,11 +3,16 @@ import { z } from "zod";
 import { authenticateRequestActor } from "@/lib/auth/session";
 import { recordAuditEvent } from "@/lib/auth/agent-auth";
 import { prisma } from "@/lib/db/prisma";
-import { formatEurCents, parseEurToCents } from "@/lib/finance/money";
+import {
+  calculateContractPaymentBreakdown,
+  formatEurCents,
+  parseEurToCents,
+} from "@/lib/finance/money";
 import { calculateContractDeadlines, formatDateDe } from "@/lib/format/date";
 
 const UpdateContractSchema = z.object({
   provider: z.string().min(1).max(160).optional(),
+  providerName: z.string().min(1).max(160).optional(),
   title: z.string().min(1).max(200).optional(),
   category: z
     .enum([
@@ -18,6 +23,12 @@ const UpdateContractSchema = z.object({
       "MOBILE",
       "INSURANCE",
       "RENT",
+      "HOUSING",
+      "ENERGY",
+      "STREAMING",
+      "FITNESS",
+      "BANKING",
+      "MOBILITY",
       "VEHICLE_INSURANCE",
       "VEHICLE_FINANCING",
       "SUBSCRIPTION",
@@ -29,10 +40,20 @@ const UpdateContractSchema = z.object({
   minimumTermMonths: z.number().int().min(0).max(600).optional().nullable(),
   noticePeriodDays: z.number().int().min(0).max(3650).optional().nullable(),
   explicitRenewalDate: z.string().optional().nullable(),
+  endDate: z.string().optional().nullable(),
   amountCents: z.number().int().min(0).optional(),
   amountEur: z.union([z.string(), z.number()]).optional(),
+  paidAmountCents: z.number().int().min(0).optional().nullable(),
+  paidAmountEur: z.union([z.string(), z.number()]).optional().nullable(),
+  remainingAmountCents: z.number().int().min(0).optional().nullable(),
+  remainingAmountEur: z.union([z.string(), z.number()]).optional().nullable(),
+  paidInstallments: z.number().int().min(0).optional().nullable(),
+  remainingInstallments: z.number().int().min(0).optional().nullable(),
   billingFrequency: z
-    .enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "ANNUAL", "ONE_TIME"])
+    .enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "ANNUAL", "YEARLY", "ONE_TIME"])
+    .optional(),
+  billingCycle: z
+    .enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "ANNUAL", "YEARLY", "ONE_TIME"])
     .optional(),
   paymentMethod: z.string().max(120).optional().nullable(),
   status: z
@@ -48,6 +69,18 @@ const UpdateContractSchema = z.object({
   archived: z.boolean().optional(),
 });
 
+function normalizeCategory(raw: string): string {
+  const map: Record<string, string> = {
+    HOUSING: "RENT",
+    ENERGY: "ELECTRICITY",
+    STREAMING: "SUBSCRIPTION",
+    FITNESS: "SUBSCRIPTION",
+    BANKING: "OTHER",
+    MOBILITY: "OTHER",
+  };
+  return map[raw] ?? raw;
+}
+
 export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
@@ -58,7 +91,7 @@ export async function GET(
   }
 
   const { id } = await context.params;
-  const contract = await prisma.contract.findFirst({
+  const contract: any = await prisma.contract.findFirst({
     where: { id, userId: actor.userId },
     include: {
       documents: true,
@@ -71,6 +104,19 @@ export async function GET(
     return NextResponse.json({ error: "NotFound" }, { status: 404 });
   }
 
+  const paymentBreakdown = calculateContractPaymentBreakdown({
+    amountCents: contract.amountCents,
+    billingFrequency: contract.billingFrequency,
+    startDate: contract.startDate,
+    renewalDate: contract.renewalDate,
+    minimumTermMonths: contract.minimumTermMonths,
+    status: contract.status,
+    paidAmountCents: contract.paidAmountCents,
+    remainingAmountCents: contract.remainingAmountCents,
+    paidInstallments: contract.paidInstallments,
+    remainingInstallments: contract.remainingInstallments,
+  });
+
   return NextResponse.json({
     contract: {
       ...contract,
@@ -80,6 +126,7 @@ export async function GET(
         contract.cancellationDeadline
       ),
       renewalDateFormattedDe: formatDateDe(contract.renewalDate),
+      ...paymentBreakdown,
     },
   });
 }
@@ -94,7 +141,7 @@ export async function PATCH(
   }
 
   const { id } = await context.params;
-  const existing = await prisma.contract.findFirst({
+  const existing: any = await prisma.contract.findFirst({
     where: { id, userId: actor.userId },
   });
   if (!existing) {
@@ -118,6 +165,25 @@ export async function PATCH(
         ? parseEurToCents(data.amountEur)
         : existing.amountCents;
 
+  const paidAmountCents =
+    data.paidAmountCents !== undefined
+      ? data.paidAmountCents
+      : data.paidAmountEur !== undefined
+        ? data.paidAmountEur !== null && String(data.paidAmountEur).trim() !== ""
+          ? parseEurToCents(data.paidAmountEur)
+          : null
+        : existing.paidAmountCents;
+
+  const remainingAmountCents =
+    data.remainingAmountCents !== undefined
+      ? data.remainingAmountCents
+      : data.remainingAmountEur !== undefined
+        ? data.remainingAmountEur !== null &&
+          String(data.remainingAmountEur).trim() !== ""
+          ? parseEurToCents(data.remainingAmountEur)
+          : null
+        : existing.remainingAmountCents;
+
   const startDate = data.startDate
     ? new Date(data.startDate)
     : existing.startDate;
@@ -129,10 +195,14 @@ export async function PATCH(
     data.noticePeriodDays !== undefined
       ? data.noticePeriodDays
       : existing.noticePeriodDays;
-  const explicitRenewalDate =
+  const rawRenewal =
     data.explicitRenewalDate !== undefined
       ? data.explicitRenewalDate
-        ? new Date(data.explicitRenewalDate)
+      : data.endDate;
+  const explicitRenewalDate =
+    rawRenewal !== undefined
+      ? rawRenewal
+        ? new Date(rawRenewal)
         : null
       : existing.renewalDate;
 
@@ -143,12 +213,21 @@ export async function PATCH(
     explicitRenewalDate,
   });
 
+  const rawFreq = data.billingFrequency || data.billingCycle;
+  const billingFrequency = rawFreq
+    ? rawFreq === "YEARLY"
+      ? "ANNUAL"
+      : rawFreq
+    : existing.billingFrequency;
+
   const updated = await prisma.contract.update({
     where: { id: existing.id },
     data: {
-      provider: data.provider ?? existing.provider,
+      provider: data.provider ?? data.providerName ?? existing.provider,
       title: data.title ?? existing.title,
-      category: data.category ?? existing.category,
+      category: data.category
+        ? (normalizeCategory(data.category) as never)
+        : existing.category,
       contractNumber:
         data.contractNumber !== undefined
           ? data.contractNumber
@@ -159,7 +238,17 @@ export async function PATCH(
       renewalDate,
       cancellationDeadline,
       amountCents,
-      billingFrequency: data.billingFrequency ?? existing.billingFrequency,
+      paidAmountCents,
+      remainingAmountCents,
+      paidInstallments:
+        data.paidInstallments !== undefined
+          ? data.paidInstallments
+          : existing.paidInstallments,
+      remainingInstallments:
+        data.remainingInstallments !== undefined
+          ? data.remainingInstallments
+          : existing.remainingInstallments,
+      billingFrequency,
       paymentMethod:
         data.paymentMethod !== undefined
           ? data.paymentMethod
@@ -183,7 +272,12 @@ export async function PATCH(
     action: "CONTRACT_UPDATED",
     entityType: "Contract",
     entityId: updated.id,
-    metadata: { status: updated.status, amountCents: updated.amountCents },
+    metadata: {
+      status: updated.status,
+      amountCents: updated.amountCents,
+      paidAmountCents: updated.paidAmountCents,
+      remainingAmountCents: updated.remainingAmountCents,
+    },
   });
 
   return NextResponse.json({ contract: updated });

@@ -42,22 +42,24 @@ export async function GET() {
       "/api/v1/agent/contracts": {
         get: {
           operationId: "listContracts",
-          summary: "List and filter household contracts (Verträge).",
+          summary:
+            "List household contracts (Verträge) including paid so far (effectivePaidCents / paidFormattedDe) and remaining payments (effectiveRemainingCents / remainingFormattedDe).",
         },
         post: {
           operationId: "createContract",
           summary:
-            "Create a new contract with automatic cancellation deadline and reminder calculation.",
+            "Create a new contract with automatic cancellation deadline, paid/remaining payment tracking (paidAmountCents/paidAmountEur, remainingAmountCents/remainingAmountEur, paidInstallments, remainingInstallments), and status (ACTIVE, CANCELLATION_PLANNED, CANCELLED, EXPIRED).",
         },
       },
       "/api/v1/agent/contracts/{id}": {
         get: {
           operationId: "getContractById",
-          summary: "Get contract details with linked documents, invoices, and reminders.",
+          summary: "Get contract details with paid/remaining breakdown, linked documents, invoices, and reminders.",
         },
         patch: {
           operationId: "updateContract",
-          summary: "Update or archive a contract and recalculate deadlines.",
+          summary:
+            "Update contract status, category, paidAmountCents/paidAmountEur, remainingAmountCents/remainingAmountEur, paidInstallments, remainingInstallments, or deadlines.",
         },
         delete: {
           operationId: "deleteContract",

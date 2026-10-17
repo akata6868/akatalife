@@ -3,7 +3,12 @@ import { z } from "zod";
 import { authenticateRequestActor } from "@/lib/auth/session";
 import { recordAuditEvent } from "@/lib/auth/agent-auth";
 import { prisma } from "@/lib/db/prisma";
-import { formatEurCents, parseEurToCents } from "@/lib/finance/money";
+import {
+  calculateContractPaymentBreakdown,
+  formatEurCents,
+  parseEurToCents,
+  sumCents,
+} from "@/lib/finance/money";
 import { calculateContractDeadlines, formatDateDe } from "@/lib/format/date";
 
 const CreateContractSchema = z.object({
@@ -39,6 +44,12 @@ const CreateContractSchema = z.object({
   endDate: z.string().optional().nullable(),
   amountCents: z.number().int().min(0).optional(),
   amountEur: z.union([z.string(), z.number()]).optional(),
+  paidAmountCents: z.number().int().min(0).optional().nullable(),
+  paidAmountEur: z.union([z.string(), z.number()]).optional().nullable(),
+  remainingAmountCents: z.number().int().min(0).optional().nullable(),
+  remainingAmountEur: z.union([z.string(), z.number()]).optional().nullable(),
+  paidInstallments: z.number().int().min(0).optional().nullable(),
+  remainingInstallments: z.number().int().min(0).optional().nullable(),
   billingFrequency: z
     .enum(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "ANNUAL", "YEARLY", "ONE_TIME"])
     .optional(),
@@ -76,10 +87,23 @@ function normalizeCategory(raw: string): string {
   return map[raw] ?? raw;
 }
 
-function normalizeBillingFrequency(raw?: string): "MONTHLY" | "QUARTERLY" | "SEMI_ANNUAL" | "ANNUAL" | "ONE_TIME" {
+function normalizeBillingFrequency(
+  raw?: string
+): "MONTHLY" | "QUARTERLY" | "SEMI_ANNUAL" | "ANNUAL" | "ONE_TIME" {
   if (!raw) return "MONTHLY";
   if (raw === "YEARLY") return "ANNUAL";
   return raw as "MONTHLY" | "QUARTERLY" | "SEMI_ANNUAL" | "ANNUAL" | "ONE_TIME";
+}
+
+function resolveOptionalCents(
+  centsVal?: number | null,
+  eurVal?: string | number | null
+): number | null {
+  if (typeof centsVal === "number") return centsVal;
+  if (eurVal !== undefined && eurVal !== null && String(eurVal).trim() !== "") {
+    return parseEurToCents(eurVal);
+  }
+  return null;
 }
 
 export async function GET(req: NextRequest) {
@@ -118,28 +142,58 @@ export async function GET(req: NextRequest) {
 
   const now = new Date();
 
-  return NextResponse.json({
-    contracts: contracts.map((c) => {
-      const isEndedByDate =
-        c.renewalDate !== null &&
-        new Date(c.renewalDate).getTime() < now.getTime() &&
-        c.status !== "ACTIVE";
-      const isTerminatedOrEnded =
-        c.status === "CANCELLED" ||
-        c.status === "CANCELLATION_PLANNED" ||
-        c.status === "EXPIRED" ||
-        c.status === "ARCHIVED" ||
-        isEndedByDate;
+  const enrichedContracts = contracts.map((c: any) => {
+    const isEndedByDate =
+      c.renewalDate !== null &&
+      new Date(c.renewalDate).getTime() < now.getTime() &&
+      c.status !== "ACTIVE";
+    const isTerminatedOrEnded =
+      c.status === "CANCELLED" ||
+      c.status === "CANCELLATION_PLANNED" ||
+      c.status === "EXPIRED" ||
+      c.status === "ARCHIVED" ||
+      isEndedByDate;
 
-      return {
-        ...c,
-        isTerminatedOrEnded,
-        amountFormattedDe: formatEurCents(c.amountCents, "de"),
-        startDateFormattedDe: formatDateDe(c.startDate),
-        cancellationDeadlineFormattedDe: formatDateDe(c.cancellationDeadline),
-        renewalDateFormattedDe: formatDateDe(c.renewalDate),
-      };
-    }),
+    const paymentBreakdown = calculateContractPaymentBreakdown({
+      amountCents: c.amountCents,
+      billingFrequency: c.billingFrequency,
+      startDate: c.startDate,
+      renewalDate: c.renewalDate,
+      minimumTermMonths: c.minimumTermMonths,
+      status: c.status,
+      paidAmountCents: c.paidAmountCents,
+      remainingAmountCents: c.remainingAmountCents,
+      paidInstallments: c.paidInstallments,
+      remainingInstallments: c.remainingInstallments,
+      referenceNow: now,
+    });
+
+    return {
+      ...c,
+      isTerminatedOrEnded,
+      amountFormattedDe: formatEurCents(c.amountCents, "de"),
+      startDateFormattedDe: formatDateDe(c.startDate),
+      cancellationDeadlineFormattedDe: formatDateDe(c.cancellationDeadline),
+      renewalDateFormattedDe: formatDateDe(c.renewalDate),
+      ...paymentBreakdown,
+    };
+  });
+
+  const totalPaidCents = sumCents(
+    enrichedContracts.map((c) => c.effectivePaidCents)
+  );
+  const totalRemainingCents = sumCents(
+    enrichedContracts.map((c) => c.effectiveRemainingCents)
+  );
+
+  return NextResponse.json({
+    paymentSummary: {
+      totalPaidCents,
+      totalPaidFormattedDe: formatEurCents(totalPaidCents, "de"),
+      totalRemainingCents,
+      totalRemainingFormattedDe: formatEurCents(totalRemainingCents, "de"),
+    },
+    contracts: enrichedContracts,
   });
 }
 
@@ -174,6 +228,15 @@ export async function POST(req: NextRequest) {
         ? parseEurToCents(data.amountEur)
         : 0;
 
+  const paidAmountCents = resolveOptionalCents(
+    data.paidAmountCents,
+    data.paidAmountEur
+  );
+  const remainingAmountCents = resolveOptionalCents(
+    data.remainingAmountCents,
+    data.remainingAmountEur
+  );
+
   const startDate = new Date(data.startDate);
   const explicitRenewalStr = data.explicitRenewalDate || data.endDate;
   const explicitRenewalDate = explicitRenewalStr
@@ -201,6 +264,10 @@ export async function POST(req: NextRequest) {
       cancellationDeadline,
       renewalDate,
       amountCents,
+      paidAmountCents,
+      remainingAmountCents,
+      paidInstallments: data.paidInstallments ?? null,
+      remainingInstallments: data.remainingInstallments ?? null,
       billingFrequency: normalizeBillingFrequency(
         data.billingFrequency || data.billingCycle
       ),
@@ -245,7 +312,13 @@ export async function POST(req: NextRequest) {
     action: "CONTRACT_CREATED",
     entityType: "Contract",
     entityId: contract.id,
-    metadata: { provider: contract.provider, title: contract.title, amountCents },
+    metadata: {
+      provider: contract.provider,
+      title: contract.title,
+      amountCents,
+      paidAmountCents,
+      remainingAmountCents,
+    },
   });
 
   return NextResponse.json({ contract }, { status: 201 });

@@ -141,3 +141,117 @@ export function calculateBudgetSummary(params: {
     isOverBudget: remainingCents < 0,
   };
 }
+
+/**
+ * Computes paid so far and remaining payments for a contract,
+ * prioritizing explicit values entered by Hermes Agent or the user,
+ * with automatic date-based calculation as fallback.
+ */
+export function calculateContractPaymentBreakdown(params: {
+  amountCents: number;
+  billingFrequency: "MONTHLY" | "QUARTERLY" | "SEMI_ANNUAL" | "ANNUAL" | "ONE_TIME";
+  startDate: Date | string;
+  renewalDate?: Date | string | null;
+  minimumTermMonths?: number | null;
+  status: string;
+  paidAmountCents?: number | null;
+  remainingAmountCents?: number | null;
+  paidInstallments?: number | null;
+  remainingInstallments?: number | null;
+  referenceNow?: Date;
+}) {
+  const now = params.referenceNow ?? new Date();
+  const start =
+    params.startDate instanceof Date
+      ? params.startDate
+      : new Date(params.startDate);
+  const renewal = params.renewalDate
+    ? params.renewalDate instanceof Date
+      ? params.renewalDate
+      : new Date(params.renewalDate)
+    : null;
+
+  const monthlyCents =
+    params.billingFrequency === "ONE_TIME"
+      ? params.amountCents
+      : calculateMonthlyEquivalentCents(
+          params.amountCents,
+          params.billingFrequency
+        );
+
+  let elapsedMonths = 0;
+  if (!Number.isNaN(start.getTime()) && start.getTime() <= now.getTime()) {
+    const yearDiff = now.getUTCFullYear() - start.getUTCFullYear();
+    const monthDiff = now.getUTCMonth() - start.getUTCMonth();
+    const dayBonus = now.getUTCDate() >= start.getUTCDate() ? 1 : 0;
+    elapsedMonths = Math.max(0, yearDiff * 12 + monthDiff + dayBonus);
+  }
+
+  let totalMonths =
+    typeof params.minimumTermMonths === "number" && params.minimumTermMonths > 0
+      ? params.minimumTermMonths
+      : 0;
+
+  if (totalMonths === 0 && renewal && !Number.isNaN(renewal.getTime())) {
+    const yDiff = renewal.getUTCFullYear() - start.getUTCFullYear();
+    const mDiff = renewal.getUTCMonth() - start.getUTCMonth();
+    totalMonths = Math.max(1, yDiff * 12 + mDiff);
+  }
+  if (totalMonths === 0) {
+    totalMonths = Math.max(elapsedMonths, 12);
+  }
+
+  const autoPaidInstallments = Math.min(elapsedMonths, totalMonths);
+  const isEndedStatus =
+    params.status === "EXPIRED" || params.status === "ARCHIVED";
+  const autoRemainingInstallments = isEndedStatus
+    ? 0
+    : Math.max(0, totalMonths - autoPaidInstallments);
+
+  const effectivePaidInstallments =
+    typeof params.paidInstallments === "number" && params.paidInstallments >= 0
+      ? params.paidInstallments
+      : autoPaidInstallments;
+
+  const effectiveRemainingInstallments =
+    typeof params.remainingInstallments === "number" &&
+    params.remainingInstallments >= 0
+      ? params.remainingInstallments
+      : autoRemainingInstallments;
+
+  const effectivePaidCents =
+    typeof params.paidAmountCents === "number" && params.paidAmountCents >= 0
+      ? params.paidAmountCents
+      : params.billingFrequency === "ONE_TIME"
+        ? params.amountCents
+        : effectivePaidInstallments * monthlyCents;
+
+  const effectiveRemainingCents =
+    typeof params.remainingAmountCents === "number" &&
+    params.remainingAmountCents >= 0
+      ? params.remainingAmountCents
+      : isEndedStatus || params.billingFrequency === "ONE_TIME"
+        ? 0
+        : effectiveRemainingInstallments * monthlyCents;
+
+  const effectiveTotalCents = effectivePaidCents + effectiveRemainingCents;
+  const paymentProgressPercent =
+    effectiveTotalCents > 0
+      ? Math.min(100, Math.round((effectivePaidCents * 100) / effectiveTotalCents))
+      : isEndedStatus
+        ? 100
+        : 0;
+
+  return {
+    effectivePaidCents,
+    paidFormattedDe: formatEurCents(effectivePaidCents, "de"),
+    effectiveRemainingCents,
+    remainingFormattedDe: formatEurCents(effectiveRemainingCents, "de"),
+    effectiveTotalCents,
+    totalFormattedDe: formatEurCents(effectiveTotalCents, "de"),
+    effectivePaidInstallments,
+    effectiveRemainingInstallments,
+    paymentProgressPercent,
+  };
+}
+

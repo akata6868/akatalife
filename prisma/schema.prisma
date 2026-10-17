@@ -150,8 +150,12 @@ model Contract {
   noticePeriodDays     Int?
   cancellationDeadline DateTime?
   renewalDate          DateTime?
-  amountCents          Int              // Stored in integer EUR cents (e.g., 4990 = 49,90 €)
-  currency             String           @default("EUR")
+  amountCents           Int              // Stored in integer EUR cents (e.g., 4990 = 49,90 €)
+  paidAmountCents       Int?             // Paid so far in integer EUR cents (Hermes Agent or manual override)
+  remainingAmountCents  Int?             // Remaining amount in integer EUR cents (Hermes Agent or manual override)
+  paidInstallments      Int?             // Number of installments/months paid so far
+  remainingInstallments Int?             // Number of remaining installments/months
+  currency              String           @default("EUR")
   billingFrequency     BillingFrequency @default(MONTHLY)
   paymentMethod        String?
   status               ContractStatus   @default(ACTIVE)
