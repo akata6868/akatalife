@@ -178,6 +178,25 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // Also mirror into PluginIntegration (slug = 'home-assistant') so /plugins and /energy never drift
+    const haPlugin = await prisma.pluginIntegration.findFirst({
+      where: { slug: "home-assistant" },
+    });
+    if (haPlugin) {
+      await prisma.pluginIntegration.update({
+        where: { id: haPlugin.id },
+        data: {
+          enabled,
+          baseUrl: baseUrl || "",
+          ...(tokenEncrypted ? { apiKeyEncrypted: tokenEncrypted } : {}),
+          status: enabled && baseUrl ? "CONNECTED" : "CONFIGURED",
+          lastPingStatus: enabled
+            ? "Enerji sayfasından güncellendi"
+            : "Devre dışı",
+        },
+      });
+    }
+
     await recordAuditEvent({
       actor,
       action: "HOME_ASSISTANT_CONFIG_UPDATED",

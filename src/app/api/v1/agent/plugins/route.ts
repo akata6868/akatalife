@@ -127,12 +127,38 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ plugins: [] });
     }
 
-    const plugins = await ensureDefaultPlugins(userId);
-    return NextResponse.json({
-      plugins: plugins
-        .filter((p: any) => p.slug !== "hermes-agent")
-        .map(serializePlugin),
-    });
+    const [plugins, haConfig] = await Promise.all([
+      ensureDefaultPlugins(userId),
+      prisma.homeAssistantConfig.findUnique({ where: { id: "singleton" } }),
+    ]);
+
+    const merged = plugins
+      .filter((p: any) => p.slug !== "hermes-agent")
+      .map((p: any) => {
+        if (p.slug === "home-assistant" && haConfig) {
+          const enabled = Boolean(haConfig.enabled);
+          const baseUrl = haConfig.baseUrl || p.baseUrl || "";
+          const apiKeyEncrypted = haConfig.tokenEncrypted || p.apiKeyEncrypted || null;
+          return serializePlugin({
+            ...p,
+            enabled,
+            baseUrl,
+            apiKeyEncrypted,
+            status: haConfig.lastSyncError
+              ? "ERROR"
+              : enabled && baseUrl
+                ? "CONNECTED"
+                : "CONFIGURED",
+            lastPingAt: haConfig.lastSyncAt ?? p.lastPingAt,
+            lastPingStatus: haConfig.lastSyncError
+              ? `Hata: ${haConfig.lastSyncError}`
+              : p.lastPingStatus || (enabled ? "Enerji sayfasıyla senkronize" : "Devre dışı"),
+          });
+        }
+        return serializePlugin(p);
+      });
+
+    return NextResponse.json({ plugins: merged });
   } catch (err) {
     return NextResponse.json(
       {
@@ -175,11 +201,17 @@ export async function POST(req: NextRequest) {
       const startMs = Date.now();
 
       if (plugin.slug === "home-assistant") {
-        const cleanUrl = normalizeHomeAssistantBaseUrl(plugin.baseUrl || "");
+        const haConfig = await prisma.homeAssistantConfig.findUnique({
+          where: { id: "singleton" },
+        });
+        const cleanUrl = normalizeHomeAssistantBaseUrl(
+          haConfig?.baseUrl || plugin.baseUrl || process.env.HOME_ASSISTANT_URL || ""
+        );
         let token = process.env.HOME_ASSISTANT_TOKEN || "";
-        if (!token && plugin.apiKeyEncrypted) {
+        const encryptedToken = haConfig?.tokenEncrypted || plugin.apiKeyEncrypted;
+        if (!token && encryptedToken) {
           try {
-            token = decryptSecret(plugin.apiKeyEncrypted);
+            token = decryptSecret(encryptedToken);
           } catch {}
         }
         if (!cleanUrl || !token) {
@@ -207,6 +239,22 @@ export async function POST(req: NextRequest) {
                 : "Home Assistant sunucusuna ulaşılamadı.";
           }
         }
+        await prisma.homeAssistantConfig.upsert({
+          where: { id: "singleton" },
+          update: {
+            lastSyncAt: pingOk ? new Date() : haConfig?.lastSyncAt,
+            lastSyncError: pingOk ? null : pingMsg,
+          },
+          create: {
+            id: "singleton",
+            enabled: Boolean(plugin.enabled),
+            baseUrl: cleanUrl || null,
+            tokenEncrypted: encryptedToken || null,
+            selectedSensors: [],
+            lastSyncAt: pingOk ? new Date() : null,
+            lastSyncError: pingOk ? null : pingMsg,
+          },
+        });
       } else if (
         plugin.slug === "mark-lv-jarvis" ||
         plugin.slug === "hermes-agent"
