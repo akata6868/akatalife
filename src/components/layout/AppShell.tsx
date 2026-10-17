@@ -27,6 +27,7 @@ import {
   Menu,
   X,
   CheckCheck,
+  RefreshCw,
 } from "lucide-react";
 import { dictionaries, Locale } from "@/lib/i18n/dictionaries";
 
@@ -66,6 +67,16 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
   const [isStandalone, setIsStandalone] = useState(false);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
+
+  // Pull-to-Refresh state
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshDone, setRefreshDone] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const touchStartYRef = useRef<number | null>(null);
+  const isPullingRef = useRef(false);
+  const thresholdVibratedRef = useRef(false);
+  const PULL_THRESHOLD = 65;
 
   const seenIdsRef = useRef<Set<string>>(new Set());
   const initialLoadDoneRef = useRef(false);
@@ -311,6 +322,98 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
     await fetch("/api/auth/logout", { method: "POST" });
     router.replace("/login");
     router.refresh();
+  }
+
+  async function triggerAppRefresh() {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    setRefreshDone(false);
+    setPullDistance(PULL_THRESHOLD);
+
+    if (typeof window !== "undefined" && "vibrate" in navigator) {
+      try {
+        navigator.vibrate(25);
+      } catch {}
+    }
+
+    await Promise.all([
+      pollNotifications(),
+      new Promise((resolve) => setTimeout(resolve, 650)),
+    ]);
+    setRefreshKey((prev) => prev + 1);
+    router.refresh();
+    setIsRefreshing(false);
+    setRefreshDone(true);
+
+    setTimeout(() => {
+      setPullDistance(0);
+      setRefreshDone(false);
+    }, 550);
+  }
+
+  function handleTouchStart(e: React.TouchEvent<HTMLDivElement>) {
+    if (isRefreshing || notifOpen || mobileMenuOpen) return;
+    const scrollTop =
+      typeof window !== "undefined"
+        ? window.scrollY || document.documentElement.scrollTop
+        : 0;
+    const firstTouch = e.touches[0];
+    if (scrollTop <= 5 && firstTouch) {
+      touchStartYRef.current = firstTouch.clientY;
+      isPullingRef.current = true;
+      thresholdVibratedRef.current = false;
+    } else {
+      touchStartYRef.current = null;
+      isPullingRef.current = false;
+    }
+  }
+
+  function handleTouchMove(e: React.TouchEvent<HTMLDivElement>) {
+    if (
+      !isPullingRef.current ||
+      touchStartYRef.current === null ||
+      isRefreshing
+    ) {
+      return;
+    }
+    const scrollTop =
+      typeof window !== "undefined"
+        ? window.scrollY || document.documentElement.scrollTop
+        : 0;
+    if (scrollTop > 5) {
+      isPullingRef.current = false;
+      setPullDistance(0);
+      return;
+    }
+    const firstTouch = e.touches[0];
+    if (!firstTouch) return;
+    const deltaY = firstTouch.clientY - touchStartYRef.current;
+    if (deltaY > 0) {
+      // Smooth elastic resistance curve
+      const damped = Math.min(115, Math.pow(deltaY, 0.82) * 1.65);
+      setPullDistance(damped);
+      if (damped >= PULL_THRESHOLD && !thresholdVibratedRef.current) {
+        thresholdVibratedRef.current = true;
+        if (typeof window !== "undefined" && "vibrate" in navigator) {
+          try {
+            navigator.vibrate(15);
+          } catch {}
+        }
+      }
+    } else {
+      setPullDistance(0);
+    }
+  }
+
+  function handleTouchEnd() {
+    if (!isPullingRef.current || isRefreshing) return;
+    isPullingRef.current = false;
+    touchStartYRef.current = null;
+    if (pullDistance >= PULL_THRESHOLD) {
+      triggerAppRefresh();
+    } else {
+      setPullDistance(0);
+    }
   }
 
   if (isLoginPage) {
@@ -646,7 +749,12 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
       )}
 
       {/* Main Content Area */}
-      <div className="flex-1 lg:pl-64 flex flex-col min-h-screen">
+      <div
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        className="flex-1 lg:pl-64 flex flex-col min-h-screen relative"
+      >
         {/* Native-Style Mobile App Top Bar */}
         <header className="lg:hidden sticky top-0 z-20 flex items-center justify-between px-4 py-3 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200 dark:border-slate-800">
           <div className="flex items-center gap-2">
@@ -655,6 +763,18 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
             </span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={triggerAppRefresh}
+              title="Sayfayı Yenile / Aktualisieren"
+              className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-teal-700 dark:text-teal-400"
+            >
+              <RefreshCw
+                className={`w-4 h-4 transition-transform ${
+                  isRefreshing ? "animate-spin" : ""
+                }`}
+              />
+            </button>
             <button
               type="button"
               onClick={() => setNotifOpen(!notifOpen)}
@@ -691,7 +811,70 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
           </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto pb-24 lg:pb-8">
+        {/* Animated Pull-to-Refresh Indicator */}
+        <div
+          style={{
+            height:
+              pullDistance > 0 || isRefreshing || refreshDone
+                ? `${Math.max(pullDistance, isRefreshing || refreshDone ? 58 : 0)}px`
+                : "0px",
+            opacity:
+              pullDistance > 8 || isRefreshing || refreshDone
+                ? Math.min(1, Math.max(pullDistance / PULL_THRESHOLD, isRefreshing || refreshDone ? 1 : 0))
+                : 0,
+          }}
+          className="overflow-hidden flex items-center justify-center transition-all duration-150 ease-out select-none pointer-events-none"
+        >
+          <div className="flex items-center gap-2.5 px-4 py-2 rounded-full bg-white dark:bg-slate-900 border border-teal-200 dark:border-teal-800 shadow-lg text-xs font-semibold text-teal-700 dark:text-teal-300">
+            <div
+              className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                refreshDone
+                  ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400"
+                  : "bg-teal-50 dark:bg-teal-950/80 text-teal-700 dark:text-teal-300"
+              }`}
+            >
+              <RefreshCw
+                style={{
+                  transform:
+                    !isRefreshing && !refreshDone
+                      ? `rotate(${Math.round(pullDistance * 3.4)}deg)`
+                      : undefined,
+                }}
+                className={`w-3.5 h-3.5 transition-transform ${
+                  isRefreshing ? "animate-spin" : ""
+                }`}
+              />
+            </div>
+            <span>
+              {isRefreshing
+                ? locale === "tr"
+                  ? "Veriler güncelleniyor…"
+                  : "Wird aktualisiert…"
+                : refreshDone
+                  ? locale === "tr"
+                    ? "✓ Güncellendi"
+                    : "✓ Aktualisiert"
+                  : pullDistance >= PULL_THRESHOLD
+                    ? locale === "tr"
+                      ? "Yenilemek için bırakın ↑"
+                      : "Zum Aktualisieren loslassen ↑"
+                    : locale === "tr"
+                      ? "Yenilemek için aşağı çekin ↓"
+                      : "Zum Aktualisieren herunterziehen ↓"}
+            </span>
+          </div>
+        </div>
+
+        <main
+          key={refreshKey}
+          style={{
+            transform:
+              pullDistance > 0 && !isRefreshing && !refreshDone
+                ? `translateY(${Math.round(pullDistance * 0.18)}px)`
+                : undefined,
+          }}
+          className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto pb-24 lg:pb-8 transition-transform duration-150 ease-out"
+        >
           {children}
         </main>
 
