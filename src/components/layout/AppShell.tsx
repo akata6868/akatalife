@@ -479,6 +479,7 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
 
   const navItems = [
     { href: "/", label: t.nav.dashboard, icon: LayoutDashboard, active: true },
+    { href: "/health-score", label: t.nav.healthScore, icon: ShieldCheck, active: true },
     { href: "/advisor", label: t.nav.advisor, icon: PiggyBank, active: true },
     { href: "/contracts", label: t.nav.contracts, icon: FileSignature, active: true },
     { href: "/finances", label: t.nav.finances, icon: Wallet, active: true },

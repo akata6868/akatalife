@@ -6,6 +6,7 @@ export const dictionaries = {
     appSubtitle: "Privates Haushalts-, Vertrags- & Finanzmanagement",
     nav: {
       dashboard: "Dashboard",
+      healthScore: "Finanz-Score (SCHUFA)",
       advisor: "Spar- & Finanzberater",
       contracts: "Verträge",
       documents: "Dokumente",
@@ -64,6 +65,7 @@ export const dictionaries = {
     appSubtitle: "Özel Ev, Sözleşme, Finans ve Belge Yönetimi",
     nav: {
       dashboard: "Panel",
+      healthScore: "Finansal Skor (SCHUFA)",
       advisor: "Tasarruf & Birikim",
       contracts: "Sözleşmeler",
       documents: "Belgeler",
