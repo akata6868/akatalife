@@ -271,10 +271,10 @@ export default function PluginsPage() {
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Blocks className="w-6 h-6 text-teal-600" />
-            Plugins & AI Entegrasyon Merkezi (Mark-LV Jarvis & Home Assistant)
+            Plugins & Dış Uygulama Entegrasyonları (Mark-LV Jarvis & Home Assistant)
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Mark-LV (J.A.R.V.I.S.), Home Assistant, Hermes Agent, n8n ve özel uygulamaları tek merkezden bağlayın ve yönetin.
+            Mark-LV (J.A.R.V.I.S.), Home Assistant, n8n, Telegram ve dış servisleri eklenti olarak bağlayın. (Hermes Agent doğrudan yerleşik API üzerinden çalışır).
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

@@ -82,32 +82,6 @@ async function ensureDefaultPlugins(userId: string) {
           : "URL ve Token bekleniyor",
       userId,
     },
-    {
-      slug: "hermes-agent",
-      name: "Hermes Agent (Otonom Finans & Sözleşme Ajanı)",
-      category: "AI_ASSISTANT",
-      description:
-        "OpenAPI 3.1 tabanlı otonom ev, sözleşme (Verträge), tasarruf danışmanı (/advisor) ve finansal rapor (/reports) ajanı.",
-      icon: "Sparkles",
-      enabled: true,
-      status: "CONNECTED",
-      baseUrl: "https://life.akata.nl/api/v1/agent/openapi.json",
-      webhookUrl: "https://life.akata.nl/api/v1/agent/notifications",
-      capabilities: [
-        "OPENAPI_3_1",
-        "SAVINGS_ADVISOR",
-        "FINANCIAL_REPORTS",
-        "CONTRACT_TRACKING",
-        "REALTIME_PUSH",
-      ],
-      configJson: {
-        authHeader: "X-Hermes-Api-Key",
-        openApiPath: "/api/v1/agent/openapi.json",
-      },
-      lastPingAt: new Date(),
-      lastPingStatus: "OpenAPI 3.1 Şeması & Canlı Bildirim Aktif",
-      userId,
-    },
   ];
 
   const created: any[] = [];
@@ -155,7 +129,9 @@ export async function GET(req: NextRequest) {
 
     const plugins = await ensureDefaultPlugins(userId);
     return NextResponse.json({
-      plugins: plugins.map(serializePlugin),
+      plugins: plugins
+        .filter((p: any) => p.slug !== "hermes-agent")
+        .map(serializePlugin),
     });
   } catch (err) {
     return NextResponse.json(
