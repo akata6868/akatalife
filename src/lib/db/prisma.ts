@@ -40,7 +40,12 @@ function generateId(): string {
   return "c" + crypto.randomBytes(12).toString("hex");
 }
 
-const TEXT_ARRAY_COLUMNS = new Set(["scopes", "tags"]);
+const TEXT_ARRAY_COLUMNS = new Set([
+  "scopes",
+  "tags",
+  "actionSteps",
+  "highlights",
+]);
 
 function sqlLiteral(val: unknown, colName?: string): string {
   if (val === null || val === undefined) return "NULL";

@@ -80,6 +80,8 @@ interface HealthScoreResponse {
     monthlyTxExpenseFormattedDe: string;
     monthlyContractLoadCents: number;
     monthlyContractLoadFormattedDe: string;
+    discretionaryExpenseCents?: number;
+    discretionaryExpenseFormattedDe?: string;
     monthlyEnergyCents: number;
     monthlyEnergyFormattedDe: string;
     totalMonthlyOutflowCents: number;
@@ -561,7 +563,8 @@ export default function HealthScorePage() {
                   <span className="w-2 h-2 rounded-full bg-amber-500" /> Değişken Gider (%{varPct.toFixed(0)})
                 </div>
                 <div className="font-bold text-slate-900 dark:text-white mt-0.5">
-                  {data.metrics.monthlyTxExpenseFormattedDe}
+                  {data.metrics.discretionaryExpenseFormattedDe ||
+                    data.metrics.monthlyTxExpenseFormattedDe}
                 </div>
               </Link>
 

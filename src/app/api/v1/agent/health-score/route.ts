@@ -68,6 +68,7 @@ export async function GET(req: NextRequest) {
     ] = await Promise.all([
       prisma.transaction.findMany({
         where: { userId: actor.userId },
+        include: { category: true },
         orderBy: { transactionDate: "desc" },
         take: 300,
       }),
@@ -132,7 +133,12 @@ export async function GET(req: NextRequest) {
     // Group variable expenses by category to find top spending category
     const categoryTotals = new Map<string, number>();
     for (const tx of expensePool) {
-      const cat = String(tx.category || "Genel Harcama");
+      const cat =
+        (typeof tx.category === "object" && tx.category !== null
+          ? tx.category.nameTr || tx.category.nameDe
+          : typeof tx.category === "string"
+          ? tx.category
+          : null) || "Genel Harcama";
       const monthlyShare = Math.round(
         Number(tx.amountCents ?? 0) / expenseMonthsCount
       );
@@ -203,9 +209,20 @@ export async function GET(req: NextRequest) {
 
     const monthlyEnergyCents = Math.round(monthlyHeatingAndWaterEur * 100);
 
-    // 4. Total Monthly Expenses (Fixed Contracts + Variable Expenses)
+    // 4. Total Monthly Outflow (no double-counting)
+    // Bank transactions already include rent, utilities, subscriptions, and daily expenses.
+    // Adding monthlyContractLoadCents on top would count fixed commitments twice.
+    // Real monthly outflow is the actual transaction expenses (or the known contract obligations if higher).
     const totalMonthlyExpenseCents =
-      monthlyVariableExpenseCents + monthlyContractLoadCents;
+      monthlyVariableExpenseCents > 0
+        ? Math.max(monthlyVariableExpenseCents, monthlyContractLoadCents)
+        : monthlyContractLoadCents;
+
+    // Discretionary variable spending (expenses beyond fixed contractual obligations)
+    const discretionaryExpenseCents = Math.max(
+      0,
+      totalMonthlyExpenseCents - monthlyContractLoadCents
+    );
 
     const netMonthlyCashflowCents =
       monthlyIncomeCents - totalMonthlyExpenseCents;
@@ -229,11 +246,11 @@ export async function GET(req: NextRequest) {
     const variableCostRatioPercent =
       monthlyIncomeCents > 0
         ? Math.round(
-            (monthlyVariableExpenseCents * 1000) / monthlyIncomeCents
+            (discretionaryExpenseCents * 1000) / monthlyIncomeCents
           ) / 10
         : totalMonthlyExpenseCents > 0
           ? Math.round(
-              (monthlyVariableExpenseCents * 1000) / totalMonthlyExpenseCents
+              (discretionaryExpenseCents * 1000) / totalMonthlyExpenseCents
             ) / 10
           : 0;
 
@@ -597,7 +614,7 @@ export async function GET(req: NextRequest) {
         type: "NEGATIVE",
         category: "FIXED_COSTS",
         title: `${expiringSoonContracts.length} Sözleşmenin Fesih Süresi Yaklaşıyor`,
-        description: `${expiringSoonContracts.map((c: any) => c.name || c.provider).join(", ")} sözleşmelerinde daha uygun tarifeye geçerek aylık sabit giderinizi düşürebilirsiniz.`,
+        description: `${expiringSoonContracts.map((c: any) => c.title || c.provider || "Sözleşme").join(", ")} sözleşmelerinde daha uygun tarifeye geçerek aylık sabit giderinizi düşürebilirsiniz.`,
         impactPoints: -10,
         impactPercent: -0.4,
         metricBadge: `${expiringSoonContracts.length} Sözleşme`,
@@ -640,9 +657,13 @@ export async function GET(req: NextRequest) {
         topContract.billingFrequency
       );
       const estSave = Math.max(1500, Math.round(topMonthly * 0.18));
+      const contractLabel =
+        topContract.title || topContract.provider || "En Yüksek Sabit Sözleşme";
+      const providerLabel =
+        topContract.provider && topContract.title ? ` (${topContract.provider})` : "";
       recommendations.push({
         id: "rec-optimize-contracts",
-        title: `Sabit Sözleşme Yükünü Azaltın: "${topContract.name}" (${topContract.provider})`,
+        title: `Sabit Sözleşme Yükünü Azaltın: "${contractLabel}"${providerLabel}`,
         description: `Aylık ${formatEurCents(topMonthly, "de")} olan en büyük sabit sözleşme giderinizi alternatif tarife veya sadakat indirimiyle %18 düşürerek aylık sabit gider oranınızı iyileştirin.`,
         category: "CONTRACT_OPTIMIZATION",
         priority: "HIGH",
@@ -653,7 +674,7 @@ export async function GET(req: NextRequest) {
         estimatedYearlySavingsFormattedDe: formatEurCents(estSave * 12, "de"),
         actionUrl: "/contracts",
         actionSteps: [
-          `${topContract.provider} sözleşmesini güncel kampanyalarla karşılaştırın.`,
+          `${topContract.provider || topContract.title || "Mevcut"} sözleşmesini güncel kampanyalarla karşılaştırın.`,
           "Kullanılmayan ek paket veya abonelikleri iptal ederek aylık sabit gideri düşürün.",
         ],
       });
@@ -832,6 +853,11 @@ export async function GET(req: NextRequest) {
         monthlyContractLoadCents,
         monthlyContractLoadFormattedDe: formatEurCents(
           monthlyContractLoadCents,
+          "de"
+        ),
+        discretionaryExpenseCents,
+        discretionaryExpenseFormattedDe: formatEurCents(
+          discretionaryExpenseCents,
           "de"
         ),
         monthlyEnergyCents,
