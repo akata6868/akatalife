@@ -28,6 +28,7 @@ import {
   X,
   CheckCheck,
   RefreshCw,
+  Blocks,
 } from "lucide-react";
 import { dictionaries, Locale } from "@/lib/i18n/dictionaries";
 
@@ -489,6 +490,7 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
     { href: "/reminders", label: t.nav.reminders, icon: Bell, active: true },
     { href: "/home", label: t.nav.home, icon: Home, active: true },
     { href: "/energy", label: t.nav.energy, icon: Cpu, active: true },
+    { href: "/plugins", label: t.nav.plugins, icon: Blocks, active: true },
     { href: "/settings", label: t.nav.settings, icon: Settings, active: true },
     { href: "/system", label: t.nav.system, icon: ShieldCheck, active: true },
   ];
