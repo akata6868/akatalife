@@ -6,6 +6,7 @@ export const dictionaries = {
     appSubtitle: "Privates Haushalts-, Vertrags- & Finanzmanagement",
     nav: {
       dashboard: "Dashboard",
+      advisor: "Spar- & Finanzberater",
       contracts: "Verträge",
       documents: "Dokumente",
       finances: "Finanzen",
@@ -62,6 +63,7 @@ export const dictionaries = {
     appSubtitle: "Özel Ev, Sözleşme, Finans ve Belge Yönetimi",
     nav: {
       dashboard: "Panel",
+      advisor: "Tasarruf & Birikim",
       contracts: "Sözleşmeler",
       documents: "Belgeler",
       finances: "Finans",

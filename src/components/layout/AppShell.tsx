@@ -22,6 +22,7 @@ import {
   Globe,
   Bot,
   LogOut,
+  PiggyBank,
 } from "lucide-react";
 import { dictionaries, Locale } from "@/lib/i18n/dictionaries";
 
@@ -96,6 +97,7 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
 
   const navItems = [
     { href: "/", label: t.nav.dashboard, icon: LayoutDashboard, active: true },
+    { href: "/advisor", label: t.nav.advisor, icon: PiggyBank, active: true },
     { href: "/contracts", label: t.nav.contracts, icon: FileSignature, active: true },
     { href: "/documents", label: t.nav.documents, icon: FolderLock, active: true },
     { href: "/finances", label: t.nav.finances, icon: Wallet, active: true },

@@ -780,4 +780,45 @@ export const prisma = {
       });
     },
   },
+
+  agentAdvice: {
+    async findMany(args?: {
+      where?: Record<string, unknown>;
+      orderBy?: unknown;
+      take?: number;
+    }): Promise<any[]> {
+      const whereSql = buildWhereClause(args?.where);
+      const orderSql = buildOrderBy(args?.orderBy);
+      const limitSql = args?.take ? `LIMIT ${Number(args.take)}` : "";
+      return executeSupabaseSql(
+        `SELECT * FROM ${SCHEMA}."AgentAdvice" WHERE ${whereSql} ${orderSql} ${limitSql};`
+      );
+    },
+    async findFirst(args: { where: Record<string, unknown> }): Promise<any | null> {
+      const whereSql = buildWhereClause(args.where);
+      const rows = await executeSupabaseSql(
+        `SELECT * FROM ${SCHEMA}."AgentAdvice" WHERE ${whereSql} LIMIT 1;`
+      );
+      return rows[0] ?? null;
+    },
+    async create(args: { data: Record<string, unknown> }): Promise<any> {
+      return insertRow("AgentAdvice", args.data, {
+        withId: true,
+        withCreatedAt: true,
+        withUpdatedAt: true,
+      });
+    },
+    async update(args: {
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+    }): Promise<any> {
+      return updateRows("AgentAdvice", args.where, args.data, true);
+    },
+    async delete(args: { where: { id: string } }): Promise<any> {
+      const rows = await executeSupabaseSql(
+        `DELETE FROM ${SCHEMA}."AgentAdvice" WHERE "id" = ${sqlLiteral(args.where.id)} RETURNING *;`
+      );
+      return rows[0] ?? null;
+    },
+  },
 };

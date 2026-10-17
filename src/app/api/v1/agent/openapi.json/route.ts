@@ -173,6 +173,29 @@ export async function GET() {
             "Save encrypted server-side Home Assistant connection settings and sensor entity list.",
         },
       },
+      "/api/v1/agent/advice": {
+        get: {
+          operationId: "listSavingsAndWealthAdvice",
+          summary:
+            "List Hermes Agent savings recommendations, tariff optimization advice, and wealth/accumulation goals.",
+        },
+        post: {
+          operationId: "createSavingsAndWealthAdvice",
+          summary:
+            "Post a new savings recommendation, tariff optimization tip, or savings/accumulation goal (SAVINGS, WEALTH, CONTRACT_OPTIMIZATION, BUDGET, DEBT_PAYOFF).",
+        },
+      },
+      "/api/v1/agent/advice/{id}": {
+        patch: {
+          operationId: "updateSavingsAndWealthAdvice",
+          summary:
+            "Update advice status (OPEN, IN_PROGRESS, APPLIED, DISMISSED), category, or accumulated savings progress.",
+        },
+        delete: {
+          operationId: "deleteSavingsAndWealthAdvice",
+          summary: "Delete a savings recommendation or wealth goal.",
+        },
+      },
       "/api/v1/agent/audit": {
         get: {
           operationId: "listAuditEvents",
