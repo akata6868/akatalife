@@ -3,138 +3,206 @@ import { authenticateRequestActor } from "@/lib/auth/session";
 import { recordAuditEvent } from "@/lib/auth/agent-auth";
 import { decryptSecret, encryptSecret } from "@/lib/auth/crypto";
 import { prisma } from "@/lib/db/prisma";
-import { fetchHomeAssistantSensors } from "@/lib/home-assistant/client";
+import {
+  fetchHomeAssistantSensors,
+  normalizeHomeAssistantBaseUrl,
+} from "@/lib/home-assistant/client";
 import { formatDateTimeDe } from "@/lib/format/date";
 
-export async function GET(req: NextRequest) {
-  const actor = await authenticateRequestActor(req);
-  if (!actor) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+function parseSelectedEntityIds(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map((x) => String(x).trim()).filter(Boolean);
   }
-
-  const config = await prisma.homeAssistantConfig.findUnique({
-    where: { id: "singleton" },
-  });
-
-  const envEnabled = process.env.HOME_ASSISTANT_ENABLED === "true";
-  const enabled = Boolean(config?.enabled || envEnabled);
-  const baseUrl = config?.baseUrl || process.env.HOME_ASSISTANT_URL || "";
-
-  let token = process.env.HOME_ASSISTANT_TOKEN || "";
-  if (!token && config?.tokenEncrypted) {
+  if (typeof raw === "string" && raw.trim().length > 0) {
     try {
-      token = decryptSecret(config.tokenEncrypted);
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((x) => String(x).trim()).filter(Boolean);
+      }
     } catch {
-      token = "";
+      return raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
     }
   }
+  return [];
+}
 
-  const selectedEntityIds: string[] = Array.isArray(config?.selectedSensors)
-    ? (config.selectedSensors as string[])
-    : [];
+export async function GET(req: NextRequest) {
+  try {
+    const actor = await authenticateRequestActor(req);
+    if (!actor) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-  if (!enabled || !baseUrl || !token || selectedEntityIds.length === 0) {
-    return NextResponse.json({
-      enabled: false,
-      configured: Boolean(baseUrl && token),
-      baseUrl: baseUrl || null,
-      selectedEntityIds,
-      lastSyncAtFormattedDe: formatDateTimeDe(config?.lastSyncAt),
-      sensors: [],
-      message:
-        "Home Assistant Integration ist deaktiviert oder noch nicht mit Sensor-Entitäten konfiguriert.",
+    const config = await prisma.homeAssistantConfig.findUnique({
+      where: { id: "singleton" },
     });
-  }
 
-  const result = await fetchHomeAssistantSensors({
-    baseUrl,
-    token,
-    entityIds: selectedEntityIds,
-  });
+    const envEnabled = process.env.HOME_ASSISTANT_ENABLED === "true";
+    const enabled = Boolean(config?.enabled || envEnabled);
+    const baseUrl = normalizeHomeAssistantBaseUrl(
+      config?.baseUrl || process.env.HOME_ASSISTANT_URL || ""
+    );
 
-  await prisma.homeAssistantConfig.upsert({
-    where: { id: "singleton" },
-    update: {
-      lastSyncAt: result.ok ? new Date() : config?.lastSyncAt,
-      lastSyncError: result.error ?? null,
-    },
-    create: {
-      id: "singleton",
-      enabled: true,
+    let token = process.env.HOME_ASSISTANT_TOKEN || "";
+    if (!token && config?.tokenEncrypted) {
+      try {
+        token = decryptSecret(config.tokenEncrypted);
+      } catch {
+        token = "";
+      }
+    }
+
+    const selectedEntityIds = parseSelectedEntityIds(config?.selectedSensors);
+
+    if (!enabled || !baseUrl || !token) {
+      return NextResponse.json({
+        enabled,
+        configured: Boolean(baseUrl && token),
+        hasToken: Boolean(token || config?.tokenEncrypted),
+        baseUrl: baseUrl || null,
+        selectedEntityIds,
+        lastSyncAtFormattedDe: formatDateTimeDe(config?.lastSyncAt),
+        lastSyncError: config?.lastSyncError ?? null,
+        sensors: [],
+        message: !baseUrl || !token
+          ? "Home Assistant URL ve Long-Lived Access Token giriniz."
+          : "Home Assistant entegrasyonu devre dışı.",
+      });
+    }
+
+    const result = await fetchHomeAssistantSensors({
       baseUrl,
-      lastSyncAt: result.ok ? new Date() : null,
-      lastSyncError: result.error ?? null,
-    },
-  });
+      token,
+      entityIds: selectedEntityIds,
+    });
 
-  return NextResponse.json({
-    enabled: true,
-    ok: result.ok,
-    syncedAt: result.syncedAt,
-    syncedAtFormattedDe: formatDateTimeDe(result.syncedAt),
-    error: result.error ?? null,
-    sensors: result.sensors,
-  });
+    const finalEntityIds =
+      selectedEntityIds.length > 0
+        ? selectedEntityIds
+        : (result.discoveredEntityIds ?? []);
+
+    await prisma.homeAssistantConfig.upsert({
+      where: { id: "singleton" },
+      update: {
+        lastSyncAt: result.ok ? new Date() : config?.lastSyncAt,
+        lastSyncError: result.error ?? null,
+        selectedSensors: finalEntityIds,
+      },
+      create: {
+        id: "singleton",
+        enabled: true,
+        baseUrl,
+        selectedSensors: finalEntityIds,
+        lastSyncAt: result.ok ? new Date() : null,
+        lastSyncError: result.error ?? null,
+      },
+    });
+
+    return NextResponse.json({
+      enabled: true,
+      configured: true,
+      hasToken: true,
+      ok: result.ok,
+      baseUrl,
+      selectedEntityIds: finalEntityIds,
+      syncedAt: result.syncedAt,
+      syncedAtFormattedDe: formatDateTimeDe(result.syncedAt),
+      error: result.error ?? null,
+      sensors: result.sensors,
+    });
+  } catch (err) {
+    return NextResponse.json(
+      {
+        enabled: false,
+        ok: false,
+        sensors: [],
+        error:
+          err instanceof Error
+            ? err.message
+            : "Home Assistant durumu okunurken hata oluştu.",
+      },
+      { status: 200 }
+    );
+  }
 }
 
 export async function POST(req: NextRequest) {
-  const actor = await authenticateRequestActor(req);
-  if (!actor) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  try {
+    const actor = await authenticateRequestActor(req);
+    if (!actor) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-  const body = await req.json().catch(() => null);
-  if (!body) {
-    return NextResponse.json({ error: "ValidationError" }, { status: 400 });
-  }
+    const body = await req.json().catch(() => null);
+    if (!body) {
+      return NextResponse.json({ error: "ValidationError" }, { status: 400 });
+    }
 
-  const enabled = Boolean(body.enabled);
-  const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : null;
-  const rawToken =
-    typeof body.token === "string" && body.token.trim().length > 0
-      ? body.token.trim()
-      : null;
-  const entityIds = Array.isArray(body.entityIds)
-    ? body.entityIds.map((id: unknown) => String(id).trim()).filter(Boolean)
-    : [];
+    const enabled = Boolean(body.enabled);
+    const rawUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
+    const baseUrl = rawUrl ? normalizeHomeAssistantBaseUrl(rawUrl) : null;
+    const rawToken =
+      typeof body.token === "string" && body.token.trim().length > 0
+        ? body.token.trim()
+        : null;
+    const entityIds = Array.isArray(body.entityIds)
+      ? body.entityIds.map((id: unknown) => String(id).trim()).filter(Boolean)
+      : [];
 
-  const existing = await prisma.homeAssistantConfig.findUnique({
-    where: { id: "singleton" },
-  });
+    const existing = await prisma.homeAssistantConfig.findUnique({
+      where: { id: "singleton" },
+    });
 
-  const tokenEncrypted = rawToken
-    ? encryptSecret(rawToken)
-    : (existing?.tokenEncrypted ?? null);
+    const tokenEncrypted = rawToken
+      ? encryptSecret(rawToken)
+      : (existing?.tokenEncrypted ?? null);
 
-  await prisma.homeAssistantConfig.upsert({
-    where: { id: "singleton" },
-    update: {
+    await prisma.homeAssistantConfig.upsert({
+      where: { id: "singleton" },
+      update: {
+        enabled,
+        baseUrl,
+        tokenEncrypted,
+        selectedSensors: entityIds,
+        lastSyncError: null,
+      },
+      create: {
+        id: "singleton",
+        enabled,
+        baseUrl,
+        tokenEncrypted,
+        selectedSensors: entityIds,
+      },
+    });
+
+    await recordAuditEvent({
+      actor,
+      action: "HOME_ASSISTANT_CONFIG_UPDATED",
+      entityType: "HomeAssistantConfig",
+      entityId: "singleton",
+      metadata: { enabled, baseUrl, entityCount: entityIds.length },
+    });
+
+    return NextResponse.json({
+      saved: true,
       enabled,
       baseUrl,
-      tokenEncrypted,
-      selectedSensors: entityIds,
-    },
-    create: {
-      id: "singleton",
-      enabled,
-      baseUrl,
-      tokenEncrypted,
-      selectedSensors: entityIds,
-    },
-  });
-
-  await recordAuditEvent({
-    actor,
-    action: "HOME_ASSISTANT_CONFIG_UPDATED",
-    entityType: "HomeAssistantConfig",
-    entityId: "singleton",
-    metadata: { enabled, baseUrl, entityCount: entityIds.length },
-  });
-
-  return NextResponse.json({
-    saved: true,
-    enabled,
-    baseUrl,
-    entityIds,
-  });
+      hasToken: Boolean(tokenEncrypted),
+      entityIds,
+    });
+  } catch (err) {
+    return NextResponse.json(
+      {
+        saved: false,
+        error:
+          err instanceof Error
+            ? err.message
+            : "Home Assistant yapılandırması kaydedilirken hata oluştu.",
+      },
+      { status: 500 }
+    );
+  }
 }

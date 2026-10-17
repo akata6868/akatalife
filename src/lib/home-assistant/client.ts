@@ -2,7 +2,7 @@
  * Read-Only Server-Side Home Assistant Client (Milestone 6).
  * - Disabled until explicitly configured.
  * - Never exposes access tokens to the client browser.
- * - Enforces strict timeouts and treats "unavailable" / "unknown" states as unavailable.
+ * - Supports both explicit entityIds and automatic sensor discovery from /api/states.
  */
 
 export interface HomeAssistantSensorState {
@@ -16,7 +16,19 @@ export interface HomeAssistantSensorState {
   isStale: boolean;
 }
 
-const STALE_THRESHOLD_MS = 6 * 60 * 60 * 1000; // 6 hours
+const STALE_THRESHOLD_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+export function normalizeHomeAssistantBaseUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^(localhost|127\.|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(trimmed)) {
+    return `http://${trimmed}`;
+  }
+  return `https://${trimmed}`;
+}
 
 export function parseHomeAssistantStatePayload(
   raw: {
@@ -65,10 +77,23 @@ export function parseHomeAssistantStatePayload(
     unit,
     friendlyName,
     lastUpdated,
-    isAvailable: !unavailable && !isStale,
+    isAvailable: !unavailable,
     isStale,
   };
 }
+
+const PREFERRED_DEVICE_CLASSES = new Set([
+  "energy",
+  "power",
+  "temperature",
+  "humidity",
+  "gas",
+  "water",
+  "battery",
+  "voltage",
+  "current",
+  "monetary",
+]);
 
 export async function fetchHomeAssistantSensors(params: {
   baseUrl: string;
@@ -79,18 +104,83 @@ export async function fetchHomeAssistantSensors(params: {
   ok: boolean;
   syncedAt: string;
   sensors: HomeAssistantSensorState[];
+  discoveredEntityIds?: string[];
   error?: string;
 }> {
-  const cleanBaseUrl = params.baseUrl.replace(/\/+$/, "");
+  const cleanBaseUrl = normalizeHomeAssistantBaseUrl(params.baseUrl);
   const timeoutMs =
     params.timeoutMs ??
-    parseInt(process.env.HOME_ASSISTANT_TIMEOUT_MS ?? "5000", 10);
+    parseInt(process.env.HOME_ASSISTANT_TIMEOUT_MS ?? "8000", 10);
 
   const sensors: HomeAssistantSensorState[] = [];
 
+  if (!cleanBaseUrl || !params.token) {
+    return {
+      ok: false,
+      syncedAt: new Date().toISOString(),
+      sensors: [],
+      error: "Home Assistant URL veya Access Token eksik.",
+    };
+  }
+
   try {
-    for (const entityId of params.entityIds) {
-      if (!/^[a-z0-9_]+\.[a-z0-9_]+$/i.test(entityId)) {
+    // If no specific entityIds were provided, auto-discover sensors via GET /api/states
+    if (params.entityIds.length === 0) {
+      const res = await fetch(`${cleanBaseUrl}/api/states`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${params.token}`,
+          "Content-Type": "application/json",
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+        cache: "no-store",
+      });
+
+      if (!res.ok) {
+        return {
+          ok: false,
+          syncedAt: new Date().toISOString(),
+          sensors: [],
+          error: `Home Assistant yanıt hatası (HTTP ${res.status}). URL ve Long-Lived Access Token bilgisini kontrol edin.`,
+        };
+      }
+
+      const allStates = await res.json();
+      if (!Array.isArray(allStates)) {
+        return {
+          ok: false,
+          syncedAt: new Date().toISOString(),
+          sensors: [],
+          error: "Home Assistant /api/states geçerli bir liste döndürmedi.",
+        };
+      }
+
+      // Filter to preferred energy/climate/household sensors first, then any sensor.* with a unit
+      const prioritized = allStates.filter((item: any) => {
+        const eid = String(item?.entity_id ?? "");
+        if (!eid.startsWith("sensor.")) return false;
+        const dc = String(item?.attributes?.device_class ?? "").toLowerCase();
+        const unit = item?.attributes?.unit_of_measurement;
+        return PREFERRED_DEVICE_CLASSES.has(dc) || typeof unit === "string";
+      });
+
+      const chosen = (prioritized.length > 0 ? prioritized : allStates.slice(0, 24)).slice(0, 24);
+      for (const raw of chosen) {
+        sensors.push(parseHomeAssistantStatePayload(raw));
+      }
+
+      return {
+        ok: true,
+        syncedAt: new Date().toISOString(),
+        sensors,
+        discoveredEntityIds: sensors.map((s) => s.entityId),
+      };
+    }
+
+    // Explicit entityIds list provided
+    for (const rawId of params.entityIds) {
+      const entityId = rawId.trim();
+      if (!entityId || !entityId.includes(".")) {
         continue;
       }
       const res = await fetch(
@@ -136,8 +226,8 @@ export async function fetchHomeAssistantSensors(params: {
       sensors,
       error:
         err instanceof Error
-          ? err.message
-          : "Home Assistant connection failed or timed out",
+          ? `Bağlantı hatası: ${err.message}`
+          : "Home Assistant sunucusuna ulaşılamadı veya zaman aşımına uğradı.",
     };
   }
 }

@@ -39,7 +39,9 @@ function generateId(): string {
   return "c" + crypto.randomBytes(12).toString("hex");
 }
 
-function sqlLiteral(val: unknown): string {
+const TEXT_ARRAY_COLUMNS = new Set(["scopes", "tags"]);
+
+function sqlLiteral(val: unknown, colName?: string): string {
   if (val === null || val === undefined) return "NULL";
   if (typeof val === "boolean") return val ? "TRUE" : "FALSE";
   if (typeof val === "number") {
@@ -50,9 +52,13 @@ function sqlLiteral(val: unknown): string {
     return `'${val.toISOString()}'::timestamptz`;
   }
   if (Array.isArray(val)) {
-    if (val.length === 0) return "ARRAY[]::text[]";
-    const items = val.map((item) => `'${String(item).replace(/'/g, "''")}'`);
-    return `ARRAY[${items.join(", ")}]::text[]`;
+    if (colName && TEXT_ARRAY_COLUMNS.has(colName)) {
+      if (val.length === 0) return "ARRAY[]::text[]";
+      const items = val.map((item) => `'${String(item).replace(/'/g, "''")}'`);
+      return `ARRAY[${items.join(", ")}]::text[]`;
+    }
+    const jsonStr = JSON.stringify(val).replace(/'/g, "''");
+    return `'${jsonStr}'::jsonb`;
   }
   if (typeof val === "object") {
     const jsonStr = JSON.stringify(val).replace(/'/g, "''");
@@ -206,7 +212,7 @@ async function insertRow<T = any>(
   for (const [k, v] of Object.entries(row)) {
     if (v === undefined) continue;
     cols.push(`"${k}"`);
-    vals.push(sqlLiteral(v));
+    vals.push(sqlLiteral(v, k));
   }
 
   const sql = `INSERT INTO ${SCHEMA}."${table}" (${cols.join(", ")}) VALUES (${vals.join(", ")}) RETURNING *;`;
@@ -223,10 +229,10 @@ async function updateRows<T = any>(
   const updates: string[] = [];
   for (const [k, v] of Object.entries(data)) {
     if (v === undefined) continue;
-    updates.push(`"${k}" = ${sqlLiteral(v)}`);
+    updates.push(`"${k}" = ${sqlLiteral(v, k)}`);
   }
   if (withUpdatedAt) {
-    updates.push(`"updatedAt" = ${sqlLiteral(new Date())}`);
+    updates.push(`"updatedAt" = ${sqlLiteral(new Date(), "updatedAt")}`);
   }
   const whereSql = buildWhereClause(where);
   const sql = `UPDATE ${SCHEMA}."${table}" SET ${updates.join(", ")} WHERE ${whereSql} RETURNING *;`;
