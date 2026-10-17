@@ -259,6 +259,21 @@ export async function POST(req: NextRequest) {
     },
   });
 
+  await prisma.notification
+    .create({
+      data: {
+        title: `Hermes Spartipp: ${created.title}`,
+        message: created.summary,
+        type: "SAVINGS",
+        priority: created.priority || "HIGH",
+        actionUrl: "/advisor",
+        readAt: null,
+        createdBy: actor.actorType,
+        userId: actor.userId,
+      },
+    })
+    .catch(() => {});
+
   await recordAuditEvent({
     actor,
     action: "ADVICE_CREATED",

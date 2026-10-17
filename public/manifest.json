@@ -1,11 +1,37 @@
 {
-  "name": "Akata Life",
+  "name": "Akata Life — Haushalts- & Finanzmanagement",
   "short_name": "Akata Life",
-  "description": "Privates Haushalts-, Vertrags-, Finanz- & Dokumentenmanagement",
+  "description": "Privates Haushalts-, Vertrags-, Finanz-, Berichte- & Dokumentenmanagement mit Hermes Agent",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#020617",
   "theme_color": "#0f766e",
   "orientation": "portrait-primary",
-  "lang": "de-DE"
+  "lang": "de-DE",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Tasarruf & Birikim",
+      "short_name": "Sparberater",
+      "url": "/advisor"
+    },
+    {
+      "name": "Verträge (Sözleşmeler)",
+      "short_name": "Verträge",
+      "url": "/contracts"
+    },
+    {
+      "name": "Berichte (Raporlar)",
+      "short_name": "Berichte",
+      "url": "/reports"
+    }
+  ]
 }

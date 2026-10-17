@@ -288,6 +288,21 @@ export async function POST(req: NextRequest) {
     },
   });
 
+  await prisma.notification
+    .create({
+      data: {
+        title: `Neuer Bericht: ${created.title}`,
+        message: summaryText.slice(0, 240),
+        type: "INFO",
+        priority: "HIGH",
+        actionUrl: "/reports",
+        readAt: null,
+        createdBy: actor.actorType,
+        userId: actor.userId,
+      },
+    })
+    .catch(() => {});
+
   await recordAuditEvent({
     actor,
     action: "REPORT_CREATED",

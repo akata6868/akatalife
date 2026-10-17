@@ -32,6 +32,7 @@ const DATE_FIELDS = new Set([
   "nextDueAt",
   "readingDate",
   "lastSyncAt",
+  "readAt",
 ]);
 
 function generateId(): string {
@@ -858,6 +859,52 @@ export const prisma = {
     async delete(args: { where: { id: string } }): Promise<any> {
       const rows = await executeSupabaseSql(
         `DELETE FROM ${SCHEMA}."AgentReport" WHERE "id" = ${sqlLiteral(args.where.id)} RETURNING *;`
+      );
+      return rows[0] ?? null;
+    },
+  },
+
+  notification: {
+    async findMany(args?: {
+      where?: Record<string, unknown>;
+      orderBy?: unknown;
+      take?: number;
+    }): Promise<any[]> {
+      const whereSql = buildWhereClause(args?.where);
+      const orderSql = buildOrderBy(args?.orderBy);
+      const limitSql = args?.take ? `LIMIT ${Number(args.take)}` : "";
+      return executeSupabaseSql(
+        `SELECT * FROM ${SCHEMA}."Notification" WHERE ${whereSql} ${orderSql} ${limitSql};`
+      );
+    },
+    async findFirst(args: { where: Record<string, unknown> }): Promise<any | null> {
+      const whereSql = buildWhereClause(args.where);
+      const rows = await executeSupabaseSql(
+        `SELECT * FROM ${SCHEMA}."Notification" WHERE ${whereSql} LIMIT 1;`
+      );
+      return rows[0] ?? null;
+    },
+    async create(args: { data: Record<string, unknown> }): Promise<any> {
+      return insertRow("Notification", args.data, {
+        withId: true,
+        withCreatedAt: true,
+        withUpdatedAt: false,
+      });
+    },
+    async update(args: {
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+    }): Promise<any> {
+      return updateRows("Notification", args.where, args.data, false);
+    },
+    async markAllRead(userId: string): Promise<void> {
+      await executeSupabaseSql(
+        `UPDATE ${SCHEMA}."Notification" SET "readAt" = ${sqlLiteral(new Date())} WHERE "userId" = ${sqlLiteral(userId)} AND "readAt" IS NULL;`
+      );
+    },
+    async delete(args: { where: { id: string } }): Promise<any> {
+      const rows = await executeSupabaseSql(
+        `DELETE FROM ${SCHEMA}."Notification" WHERE "id" = ${sqlLiteral(args.where.id)} RETURNING *;`
       );
       return rows[0] ?? null;
     },

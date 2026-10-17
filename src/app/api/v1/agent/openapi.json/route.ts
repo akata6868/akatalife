@@ -218,6 +218,21 @@ export async function GET() {
           summary: "Delete a report.",
         },
       },
+      "/api/v1/agent/notifications": {
+        get: {
+          operationId: "listNotifications",
+          summary: "List real-time notifications and unread count.",
+        },
+        post: {
+          operationId: "sendRealtimeNotification",
+          summary:
+            "Send an immediate real-time notification (Benachrichtigung) to the user's mobile/desktop app.",
+        },
+        patch: {
+          operationId: "markNotificationsRead",
+          summary: "Mark one or all notifications as read.",
+        },
+      },
       "/api/v1/agent/audit": {
         get: {
           operationId: "listAuditEvents",
