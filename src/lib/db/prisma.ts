@@ -553,6 +553,23 @@ export const prisma = {
       }
       return txs;
     },
+    async findFirst(args: {
+      where: Record<string, unknown>;
+      include?: { category?: boolean };
+    }): Promise<any | null> {
+      const whereSql = buildWhereClause(args.where);
+      const rows = await executeSupabaseSql<any>(
+        `SELECT * FROM ${SCHEMA}."Transaction" WHERE ${whereSql} LIMIT 1;`
+      );
+      const t = rows[0] ?? null;
+      if (t && args.include?.category && t.categoryId) {
+        const cats = await executeSupabaseSql<any>(
+          `SELECT * FROM ${SCHEMA}."Category" WHERE "id" = ${sqlLiteral(t.categoryId)} LIMIT 1;`
+        );
+        t.category = cats[0] ?? null;
+      }
+      return t;
+    },
     async create(args: {
       data: Record<string, unknown>;
       include?: { category?: boolean };
@@ -569,6 +586,26 @@ export const prisma = {
         created.category = cats[0] ?? null;
       }
       return created;
+    },
+    async update(args: {
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+      include?: { category?: boolean };
+    }): Promise<any> {
+      const updated = await updateRows("Transaction", args.where, args.data, true);
+      if (args.include?.category && updated?.categoryId) {
+        const cats = await executeSupabaseSql<any>(
+          `SELECT * FROM ${SCHEMA}."Category" WHERE "id" = ${sqlLiteral(updated.categoryId)} LIMIT 1;`
+        );
+        updated.category = cats[0] ?? null;
+      }
+      return updated;
+    },
+    async delete(args: { where: Record<string, unknown> }): Promise<void> {
+      const whereSql = buildWhereClause(args.where);
+      await executeSupabaseSql(
+        `DELETE FROM ${SCHEMA}."Transaction" WHERE ${whereSql};`
+      );
     },
   },
 

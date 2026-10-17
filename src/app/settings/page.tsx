@@ -241,6 +241,21 @@ export default function SettingsPage() {
       desc: "Skor Simülasyonu (Gider Azaltma / Gelir Artışı Senaryosu)",
     },
     {
+      method: "GET | POST",
+      path: "/api/v1/agent/health-score/plan",
+      desc: "İyileştirme Planı: Listele / Tavsiye Ekle (recommendationId veya özel)",
+    },
+    {
+      method: "PATCH | DELETE",
+      path: "/api/v1/agent/health-score/plan/{id}",
+      desc: "İyileştirme Planı Maddesi Güncelle / Sil",
+    },
+    {
+      method: "GET | PATCH | DELETE",
+      path: "/api/v1/agent/transactions/{id}",
+      desc: "Gelir/Gider Kaydı Oku / Düzenle / Sil (Skoru etkiler)",
+    },
+    {
       method: "GET | POST | PATCH",
       path: "/api/v1/agent/contracts",
       desc: "Sözleşmeler (Verträge), İkon Durumu & Ödenen/Kalan Taksit",

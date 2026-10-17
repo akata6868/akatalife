@@ -101,6 +101,46 @@ export async function GET() {
         post: {
           operationId: "createTransaction",
           summary: "Record a new income or expense transaction.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["description", "transactionDate", "type"],
+                  properties: {
+                    description: { type: "string" },
+                    type: { type: "string", enum: ["INCOME", "EXPENSE"] },
+                    amountEur: { type: "number", description: "Amount in EUR (or use amountCents)." },
+                    amountCents: { type: "integer" },
+                    transactionDate: { type: "string", description: "ISO date, e.g. 2026-10-17" },
+                    status: { type: "string", enum: ["PLANNED", "RECORDED", "CONFIRMED"] },
+                    categorySlug: { type: "string" },
+                    notes: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/api/v1/agent/transactions/{id}": {
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+        ],
+        get: {
+          operationId: "getTransaction",
+          summary: "Get a single income/expense transaction.",
+        },
+        patch: {
+          operationId: "updateTransaction",
+          summary:
+            "Update a transaction (description, amountEur/amountCents, transactionDate, type, status, categorySlug, notes). Changes immediately affect the monthly financial health score.",
+        },
+        delete: {
+          operationId: "deleteTransaction",
+          summary:
+            "Delete an income/expense transaction. Changes immediately affect the monthly financial health score.",
         },
       },
       "/api/v1/agent/transactions/export": {
@@ -185,6 +225,54 @@ export async function GET() {
           operationId: "simulateFinancialHealthScore",
           summary:
             "What-if simulation. Body: { expenseCutEur, incomeBoostEur, contractDiscount15, optimizeEnergy }. Returns simulated score, class and yearly savings.",
+        },
+      },
+      "/api/v1/agent/health-score/plan": {
+        get: {
+          operationId: "listHealthScorePlan",
+          summary:
+            "List items in the user's monthly financial improvement plan (saved recommendations).",
+        },
+        post: {
+          operationId: "addHealthScorePlanItem",
+          summary:
+            "Add an item to the improvement plan. Either { recommendationId } (id from GET /health-score recommendations, e.g. rec-optimize-contracts) or a custom item { title, summary, category, priority, actionSteps, monthlySavingsEur }.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    recommendationId: { type: "string" },
+                    title: { type: "string" },
+                    summary: { type: "string" },
+                    category: {
+                      type: "string",
+                      enum: ["SAVINGS", "WEALTH", "CONTRACT_OPTIMIZATION", "BUDGET", "DEBT_PAYOFF", "GENERAL"],
+                    },
+                    priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+                    actionSteps: { type: "array", items: { type: "string" } },
+                    monthlySavingsEur: { type: "number" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/api/v1/agent/health-score/plan/{id}": {
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+        ],
+        patch: {
+          operationId: "updateHealthScorePlanItem",
+          summary:
+            "Update a plan item (status OPEN | IN_PROGRESS | APPLIED | DISMISSED, priority, progress).",
+        },
+        delete: {
+          operationId: "deleteHealthScorePlanItem",
+          summary: "Remove an item from the improvement plan.",
         },
       },
       "/api/v1/agent/advice": {
