@@ -515,10 +515,16 @@ export default function EnergyPage() {
           <button
             type="button"
             onClick={() => setShowSettings((v) => !v)}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-semibold transition cursor-pointer ${
+              showSettings
+                ? "border-teal-600 bg-teal-600 text-white shadow-xs"
+                : "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800"
+            }`}
             title="Bağlantı Ayarları"
           >
-            <Settings2 className="w-3.5 h-3.5 text-slate-500" />
+            <Settings2
+              className={`w-3.5 h-3.5 ${showSettings ? "text-white" : "text-slate-500"}`}
+            />
             Ayarlar
             {showSettings ? (
               <ChevronUp className="w-3.5 h-3.5" />
@@ -563,6 +569,131 @@ export default function EnergyPage() {
             <X className="w-4 h-4" />
           </button>
         </div>
+      )}
+
+      {/* Top Collapsible Server-Side Connection Settings */}
+      {showSettings && (
+        <form
+          onSubmit={handleSaveConfig}
+          className="rounded-2xl border-2 border-teal-500/40 dark:border-teal-500/30 bg-white dark:bg-slate-900 p-5 space-y-4 shadow-lg"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
+            <div>
+              <h2 className="text-sm font-bold flex items-center gap-2">
+                <Settings2 className="w-4 h-4 text-teal-600" />
+                Home Assistant Bağlantı Ayarları (Sunucu Tarafı)
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Bu ayarlar `/plugins` sayfasındaki Home Assistant kartıyla %100 senkronize çalışır.
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              {syncedAt && (
+                <span className="text-xs text-slate-500">
+                  Son Senkronizasyon: {syncedAt}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowSettings(false)}
+                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2.5 text-xs font-semibold cursor-pointer p-3 rounded-xl bg-teal-50/50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-900">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+              className="rounded border-slate-300 text-teal-600"
+            />
+            <span>Home Assistant Read-Only Integration aktivieren (Aktif Et)</span>
+          </label>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium mb-1">
+                Home Assistant Basis-URL *
+              </label>
+              <input
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="https://ha68.nl"
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-sm font-mono"
+              />
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-medium">
+                  Long-Lived Access Token (AES-256-GCM)
+                </label>
+                {hasToken && (
+                  <span className="text-[10px] font-semibold text-emerald-600">
+                    ✓ Sunucuda kayıtlı token var
+                  </span>
+                )}
+              </div>
+              <input
+                type="text"
+                name="ha_long_lived_jwt_token"
+                autoComplete="off"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder={
+                  hasToken
+                    ? "Kayıtlı token mevcut (değiştirmek için yeni eyJ... token yapıştırın)"
+                    : "Home Assistant Long-Lived Token (eyJ...) giriniz…"
+                }
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-sm font-mono"
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-medium">
+                Seçili Sensör Entity-ID Listesi (Boş bırakırsanız çalışanlar otomatik bulunur)
+              </label>
+              <button
+                type="button"
+                onClick={handleAutoDiscoverActive}
+                className="text-[11px] font-semibold text-teal-600 hover:underline cursor-pointer"
+              >
+                Sıfırla & Tüm Aktif Sensörleri Otomatik Bul
+              </button>
+            </div>
+            <input
+              type="text"
+              autoComplete="off"
+              value={entityListText}
+              onChange={(e) => setEntityListText(e.target.value)}
+              placeholder="Boş bırakıp Kaydet'e basarsanız çalışan tüm sensörler otomatik bulunur…"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-mono"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={saving}
+              className="inline-flex items-center gap-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2 text-xs font-semibold cursor-pointer"
+            >
+              {saving ? "Kaydediliyor…" : "Konfiguration speichern (Kaydet & Bağlan)"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowSettings(false)}
+              className="rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs font-semibold cursor-pointer"
+            >
+              Kapat
+            </button>
+          </div>
+        </form>
       )}
 
       {/* KPI Summary Cards */}
@@ -957,122 +1088,6 @@ export default function EnergyPage() {
             )}
           </div>
         </div>
-      )}
-
-      {/* Collapsible Server-Side Connection Settings */}
-      {showSettings && (
-        <form
-          onSubmit={handleSaveConfig}
-          className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4 shadow-xs"
-        >
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
-            <div>
-              <h2 className="text-sm font-bold flex items-center gap-2">
-                <Settings2 className="w-4 h-4 text-teal-600" />
-                Home Assistant Bağlantı Ayarları (Sunucu Tarafı)
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Bu ayarlar `/plugins` sayfasındaki Home Assistant kartıyla %100 senkronize çalışır.
-              </p>
-            </div>
-            {syncedAt && (
-              <span className="text-xs text-slate-500">
-                Son Senkronizasyon: {syncedAt}
-              </span>
-            )}
-          </div>
-
-          <label className="flex items-center gap-2.5 text-xs font-semibold cursor-pointer p-3 rounded-xl bg-teal-50/50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-900">
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-              className="rounded border-slate-300 text-teal-600"
-            />
-            <span>Home Assistant Read-Only Integration aktivieren (Aktif Et)</span>
-          </label>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-medium mb-1">
-                Home Assistant Basis-URL *
-              </label>
-              <input
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="https://ha68.nl"
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-sm font-mono"
-              />
-            </div>
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-medium">
-                  Long-Lived Access Token (AES-256-GCM)
-                </label>
-                {hasToken && (
-                  <span className="text-[10px] font-semibold text-emerald-600">
-                    ✓ Sunucuda kayıtlı token var
-                  </span>
-                )}
-              </div>
-              <input
-                type="text"
-                name="ha_long_lived_jwt_token"
-                autoComplete="off"
-                data-lpignore="true"
-                data-1p-ignore="true"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                placeholder={
-                  hasToken
-                    ? "Kayıtlı token mevcut (değiştirmek için yeni eyJ... token yapıştırın)"
-                    : "Home Assistant Long-Lived Token (eyJ...) giriniz…"
-                }
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-sm font-mono"
-              />
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-medium">
-                Seçili Sensör Entity-ID Listesi (Boş bırakırsanız çalışanlar otomatik bulunur)
-              </label>
-              <button
-                type="button"
-                onClick={handleAutoDiscoverActive}
-                className="text-[11px] font-semibold text-teal-600 hover:underline cursor-pointer"
-              >
-                Sıfırla & Tüm Aktif Sensörleri Otomatik Bul
-              </button>
-            </div>
-            <input
-              type="text"
-              autoComplete="off"
-              value={entityListText}
-              onChange={(e) => setEntityListText(e.target.value)}
-              placeholder="Boş bırakıp Kaydet'e basarsanız çalışan tüm sensörler otomatik bulunur…"
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-xs font-mono"
-            />
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="submit"
-              disabled={saving}
-              className="inline-flex items-center gap-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2 text-xs font-semibold cursor-pointer"
-            >
-              {saving ? "Kaydediliyor…" : "Konfiguration speichern (Kaydet & Bağlan)"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowSettings(false)}
-              className="rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs font-semibold cursor-pointer"
-            >
-              Kapat
-            </button>
-          </div>
-        </form>
       )}
 
       {/* Sensor Catalog / Picker Modal */}
