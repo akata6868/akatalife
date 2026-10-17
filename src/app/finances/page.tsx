@@ -94,14 +94,22 @@ export default function FinancesPage() {
             Exakte Cent-Arithmetik (EUR) ohne Gleitkommafehler · Unterscheidung zwischen geplanten, erfassten und bestätigten Zahlungen.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowForm(!showForm)}
-          className="inline-flex items-center gap-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white px-4 py-2 text-xs font-semibold"
-        >
-          <Plus className="w-4 h-4" />
-          Buchung erfassen
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href="/api/v1/agent/transactions/export"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            CSV Export
+          </a>
+          <button
+            type="button"
+            onClick={() => setShowForm(!showForm)}
+            className="inline-flex items-center gap-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white px-4 py-2 text-xs font-semibold"
+          >
+            <Plus className="w-4 h-4" />
+            Buchung erfassen
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

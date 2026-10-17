@@ -1,7 +1,30 @@
-import React from "react";
-import { ShieldCheck, Database, Server, Bot } from "lucide-react";
+"use client";
+
+import React, { useEffect, useState } from "react";
+import { ShieldCheck, Database, Server, Bot, History } from "lucide-react";
+
+interface AuditItem {
+  id: string;
+  actorType: "USER" | "HERMES_AGENT" | "SYSTEM";
+  actorLabel: string;
+  action: string;
+  entityType: string | null;
+  entityId: string | null;
+  createdAtFormattedDe: string;
+}
 
 export default function SystemStatusPage() {
+  const [events, setEvents] = useState<AuditItem[]>([]);
+
+  useEffect(() => {
+    fetch("/api/v1/agent/audit")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.events) setEvents(data.events);
+      })
+      .catch(() => {});
+  }, []);
+
   return (
     <div className="space-y-6">
       <div className="border-b border-slate-200 dark:border-slate-800 pb-4">
@@ -53,6 +76,58 @@ export default function SystemStatusPage() {
             Vollzugriff über Bearer-API-Key mit lückenlosem Audit-Log.
           </p>
         </div>
+      </div>
+
+      {/* Security & Hermes Agent Audit Trail */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4">
+        <h2 className="text-sm font-semibold flex items-center gap-2">
+          <History className="w-4 h-4 text-teal-600" />
+          Sicherheits- & Hermes-Agent-Audit-Protokoll (`AuditEvent`)
+        </h2>
+        {events.length === 0 ? (
+          <p className="text-xs text-slate-500">
+            Melden Sie sich an, um das Sicherheits- und Hermes-Agent-Audit-Protokoll einzusehen.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="border-b border-slate-200 dark:border-slate-800 text-slate-500 uppercase">
+                <tr>
+                  <th className="py-2 pr-4">Zeitpunkt</th>
+                  <th className="py-2 pr-4">Akteur</th>
+                  <th className="py-2 pr-4">Aktion</th>
+                  <th className="py-2">Entität</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                {events.map((ev) => (
+                  <tr key={ev.id}>
+                    <td className="py-2.5 pr-4 font-mono">
+                      {ev.createdAtFormattedDe}
+                    </td>
+                    <td className="py-2.5 pr-4">
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded font-medium ${
+                          ev.actorType === "HERMES_AGENT"
+                            ? "bg-teal-50 dark:bg-teal-950 text-teal-700 dark:text-teal-300"
+                            : "bg-slate-100 dark:bg-slate-800"
+                        }`}
+                      >
+                        {ev.actorType} · {ev.actorLabel}
+                      </span>
+                    </td>
+                    <td className="py-2.5 pr-4 font-mono font-semibold">
+                      {ev.action}
+                    </td>
+                    <td className="py-2.5 font-mono text-slate-500">
+                      {ev.entityType ?? "—"} {ev.entityId ? `(${ev.entityId})` : ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

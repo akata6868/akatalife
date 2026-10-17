@@ -1,0 +1,41 @@
+name: Akata Life CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality-and-build:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/akatalife_test?schema=public"
+      DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/akatalife_test?schema=public"
+      SESSION_SECRET: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ENCRYPTION_KEY: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      TZ: "Europe/Berlin"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Run TypeScript strict check
+        run: npm run typecheck
+
+      - name: Run unit & domain security tests
+        run: npm test
+
+      - name: Build Next.js standalone production bundle
+        run: npm run build

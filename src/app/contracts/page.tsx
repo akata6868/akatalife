@@ -98,14 +98,28 @@ export default function ContractsPage() {
             Strom, Gas, Internet, Mobilfunk, Versicherungen, Miete & Abonnements mit automatischer Kündigungsfrist-Berechnung.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowForm(!showForm)}
-          className="inline-flex items-center gap-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white px-4 py-2 text-xs font-semibold"
-        >
-          <Plus className="w-4 h-4" />
-          Neuer Vertrag
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href="/api/v1/agent/contracts/export?format=csv"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            CSV Export
+          </a>
+          <a
+            href="/api/v1/agent/contracts/export?format=json"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            JSON Export
+          </a>
+          <button
+            type="button"
+            onClick={() => setShowForm(!showForm)}
+            className="inline-flex items-center gap-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white px-4 py-2 text-xs font-semibold"
+          >
+            <Plus className="w-4 h-4" />
+            Neuer Vertrag
+          </button>
+        </div>
       </div>
 
       {error && (

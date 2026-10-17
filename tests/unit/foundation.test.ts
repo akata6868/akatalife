@@ -180,3 +180,51 @@ describe("Milestone 1 & 2 — Rate Limiting, Hermes Agent Header Auth & i18n", (
     expect(tr.nav.contracts).toBe("Sözleşmeler");
   });
 });
+
+
+import { parseHomeAssistantStatePayload } from "@/lib/home-assistant/client";
+
+describe("Milestone 6 — Home Assistant Read-Only Sensor & Stale Data Handling", () => {
+  it("parses valid numeric sensor states and flags 'unavailable' or stale (>6h) readings", () => {
+    const now = new Date("2026-10-17T12:00:00Z");
+
+    const valid = parseHomeAssistantStatePayload(
+      {
+        entity_id: "sensor.wohnzimmer_temperatur",
+        state: "21.4",
+        last_updated: "2026-10-17T11:55:00Z",
+        attributes: {
+          unit_of_measurement: "°C",
+          friendly_name: "Wohnzimmer Temperatur",
+        },
+      },
+      now
+    );
+    expect(valid.isAvailable).toBe(true);
+    expect(valid.isStale).toBe(false);
+    expect(valid.numericValue).toBe(21.4);
+    expect(valid.unit).toBe("°C");
+
+    const unavailable = parseHomeAssistantStatePayload(
+      {
+        entity_id: "sensor.gasverbrauch",
+        state: "unavailable",
+        last_updated: "2026-10-17T11:55:00Z",
+      },
+      now
+    );
+    expect(unavailable.isAvailable).toBe(false);
+    expect(unavailable.numericValue).toBeNull();
+
+    const stale = parseHomeAssistantStatePayload(
+      {
+        entity_id: "sensor.stromzaehler",
+        state: "1450.2",
+        last_updated: "2026-10-16T00:00:00Z", // > 36 hours old
+      },
+      now
+    );
+    expect(stale.isStale).toBe(true);
+    expect(stale.isAvailable).toBe(false);
+  });
+});
