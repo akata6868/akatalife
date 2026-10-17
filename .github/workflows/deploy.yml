@@ -1,0 +1,25 @@
+name: Coolify Auto Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Trigger Coolify Deployment
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Coolify Webhook
+        env:
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+        run: |
+          if [ -z "$COOLIFY_TOKEN" ]; then
+            echo "::warning::COOLIFY_API_TOKEN secret is not set in GitHub Repository Secrets. Trying unauthenticated call..."
+            curl -f -s -S -X GET "https://coolify.memman.de/api/v1/deploy?uuid=ygf9luexbx0trngmemsm4dmi&force=false" || true
+          else
+            curl -f -s -S -X GET "https://coolify.memman.de/api/v1/deploy?uuid=ygf9luexbx0trngmemsm4dmi&force=false" \
+              -H "Authorization: Bearer $COOLIFY_TOKEN" \
+              -H "Content-Type: application/json"
+          fi
