@@ -231,6 +231,16 @@ export default function SettingsPage() {
       desc: "Tüm Hane, Sözleşme, Bütçe ve Tasarruf Özeti",
     },
     {
+      method: "GET",
+      path: "/api/v1/agent/health-score",
+      desc: "Aylık Finansal Sağlık Skoru, Pozitif/Negatif Etkenler & Tavsiyeler",
+    },
+    {
+      method: "POST",
+      path: "/api/v1/agent/health-score/simulate",
+      desc: "Skor Simülasyonu (Gider Azaltma / Gelir Artışı Senaryosu)",
+    },
+    {
       method: "GET | POST | PATCH",
       path: "/api/v1/agent/contracts",
       desc: "Sözleşmeler (Verträge), İkon Durumu & Ödenen/Kalan Taksit",

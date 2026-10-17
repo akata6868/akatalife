@@ -173,6 +173,20 @@ export async function GET() {
             "Save encrypted server-side Home Assistant connection settings and sensor entity list.",
         },
       },
+      "/api/v1/agent/health-score": {
+        get: {
+          operationId: "getMonthlyFinancialHealthScore",
+          summary:
+            "Monthly financial health score (SCHUFA-style percent/points/class) based on income vs expenses, savings rate, fixed/variable cost ratios and energy cost, with positive/negative factors and improvement recommendations.",
+        },
+      },
+      "/api/v1/agent/health-score/simulate": {
+        post: {
+          operationId: "simulateFinancialHealthScore",
+          summary:
+            "What-if simulation. Body: { expenseCutEur, incomeBoostEur, contractDiscount15, optimizeEnergy }. Returns simulated score, class and yearly savings.",
+        },
+      },
       "/api/v1/agent/advice": {
         get: {
           operationId: "listSavingsAndWealthAdvice",
