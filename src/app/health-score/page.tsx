@@ -18,9 +18,9 @@ import {
   Wallet,
   FileSignature,
   Flame,
-  Receipt,
   PiggyBank,
   Info,
+  PieChart,
 } from "lucide-react";
 
 interface ScoreFactor {
@@ -88,10 +88,15 @@ interface HealthScoreResponse {
     netMonthlyCashflowFormattedDe: string;
     savingsRatePercent: number;
     fixedCostRatioPercent: number;
+    variableCostRatioPercent?: number;
+    totalExpenseToIncomePercent?: number;
     activeContractsCount: number;
-    overdueInvoicesCount: number;
-    unpaidInvoicesCount: number;
     energyConnected: boolean;
+    topExpenseCategories?: Array<{
+      category: string;
+      amountCents: number;
+      amountFormattedDe: string;
+    }>;
   };
   positiveFactors: ScoreFactor[];
   negativeFactors: ScoreFactor[];
@@ -105,10 +110,10 @@ export default function HealthScorePage() {
   const [addedRecIds, setAddedRecIds] = useState<Record<string, boolean>>({});
   const [addingRecId, setAddingRecId] = useState<string | null>(null);
 
-  // Interactive "What-If" Score Simulator State
-  const [simMonthlyCutEur, setSimMonthlyCutEur] = useState(0);
-  const [simExtraIncomeEur, setSimExtraIncomeEur] = useState(0);
-  const [simPayOverdue, setSimPayOverdue] = useState(false);
+  // Interactive Monthly Income & Expense Simulator State
+  const [simExpenseCutEur, setSimExpenseCutEur] = useState(0);
+  const [simIncomeBoostEur, setSimIncomeBoostEur] = useState(0);
+  const [simContractDiscount15, setSimContractDiscount15] = useState(false);
   const [simOptimizeEnergy, setSimOptimizeEnergy] = useState(false);
 
   async function loadScore() {
@@ -167,29 +172,38 @@ export default function HealthScorePage() {
     }
   }
 
-  // Simulated score calculation
+  // Simulated Monthly Budget & Score calculation
   const simulated = useMemo(() => {
     if (!data) return null;
+
+    const contractSaveEur = simContractDiscount15
+      ? Math.round((data.metrics.monthlyContractLoadCents / 100) * 0.15)
+      : 0;
+    const energySaveEur = simOptimizeEnergy
+      ? Math.max(15, Math.round((data.metrics.monthlyEnergyCents / 100) * 0.14))
+      : 0;
+
+    const totalMonthlyGainEur =
+      simExpenseCutEur + simIncomeBoostEur + contractSaveEur + energySaveEur;
 
     let bonusPoints = 0;
     let bonusPercent = 0;
 
-    if (simMonthlyCutEur > 0) {
-      const pts = Math.round(Math.min(45, simMonthlyCutEur * 0.12));
+    if (simExpenseCutEur > 0) {
+      const pts = Math.round(Math.min(45, simExpenseCutEur * 0.12));
       bonusPoints += pts;
-      bonusPercent += Math.round(pts * 4) / 100;
+      bonusPercent += pts * 0.04;
     }
 
-    if (simExtraIncomeEur > 0) {
-      const pts = Math.round(Math.min(40, simExtraIncomeEur * 0.04));
+    if (simIncomeBoostEur > 0) {
+      const pts = Math.round(Math.min(45, simIncomeBoostEur * 0.045));
       bonusPoints += pts;
-      bonusPercent += Math.round(pts * 3.8) / 100;
+      bonusPercent += pts * 0.038;
     }
 
-    if (simPayOverdue && data.metrics.overdueInvoicesCount > 0) {
-      const pts = Math.min(60, data.metrics.overdueInvoicesCount * 22);
-      bonusPoints += pts;
-      bonusPercent += 2.1;
+    if (simContractDiscount15) {
+      bonusPoints += 18;
+      bonusPercent += 0.75;
     }
 
     if (simOptimizeEnergy) {
@@ -207,13 +221,15 @@ export default function HealthScorePage() {
       ) / 100;
 
     let newClass = data.score.ratingClass;
-    if (newPercent >= 96.5) newClass = "A+";
-    else if (newPercent >= 93.5) newClass = "A";
-    else if (newPercent >= 89.0) newClass = "B";
-    else if (newPercent >= 82.0) newClass = "C";
+    if (newPercent >= 96.0) newClass = "A+";
+    else if (newPercent >= 92.5) newClass = "A";
+    else if (newPercent >= 87.5) newClass = "B";
+    else if (newPercent >= 80.0) newClass = "C";
     else newClass = "D";
 
-    const yearlyExtraSavingsEur = (simMonthlyCutEur + (simOptimizeEnergy ? 20 : 0)) * 12;
+    const currentNetEur = data.metrics.netMonthlyCashflowCents / 100;
+    const newMonthlyNetEur = currentNetEur + totalMonthlyGainEur;
+    const yearlyExtraSavingsEur = totalMonthlyGainEur * 12;
 
     return {
       bonusPoints,
@@ -221,13 +237,17 @@ export default function HealthScorePage() {
       newPoints,
       newPercent,
       newClass,
+      totalMonthlyGainEur,
+      newMonthlyNetEur,
       yearlyExtraSavingsEur,
+      contractSaveEur,
+      energySaveEur,
     };
   }, [
     data,
-    simMonthlyCutEur,
-    simExtraIncomeEur,
-    simPayOverdue,
+    simExpenseCutEur,
+    simIncomeBoostEur,
+    simContractDiscount15,
     simOptimizeEnergy,
   ]);
 
@@ -236,10 +256,10 @@ export default function HealthScorePage() {
       <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-12 text-center space-y-3">
         <RefreshCw className="w-8 h-8 text-teal-600 animate-spin mx-auto" />
         <div className="text-sm font-semibold">
-          SCHUFA-Tarzı Finansal Sağlık Skorunuz Hesaplanıyor…
+          Aylık Gelir-Gider & Finansal Sağlık Skorunuz Hesaplanıyor…
         </div>
         <p className="text-xs text-slate-500">
-          Gelirler, giderler, aktif sözleşmeler, faturalar ve Home Assistant enerji verileriniz analiz ediliyor.
+          Aylık gelirleriniz, sabit sözleşmeleriniz, değişken giderleriniz ve tasarruf potansiyeliniz analiz ediliyor.
         </p>
       </div>
     );
@@ -253,7 +273,6 @@ export default function HealthScorePage() {
     );
   }
 
-  // Gauge SVG math
   const gaugeProgress = Math.max(
     0,
     Math.min(100, (data.score.schufaPoints / data.score.maxPoints) * 100)
@@ -263,11 +282,21 @@ export default function HealthScorePage() {
   const strokeDashoffset =
     circumference - (gaugeProgress / 100) * circumference;
 
-  // Position on the SCHUFA horizontal bar (50% to 100% mapped to 0%..100% width)
   const barMarkerLeft = Math.max(
     4,
     Math.min(96, ((data.score.schufaPercent - 75) / 25) * 100)
   );
+
+  // 50/30/20 Breakdown Bar percentages
+  const fixedPct = Math.max(
+    0,
+    Math.min(100, data.metrics.fixedCostRatioPercent || 0)
+  );
+  const varPct = Math.max(
+    0,
+    Math.min(100 - fixedPct, data.metrics.variableCostRatioPercent || 0)
+  );
+  const savePct = Math.max(0, 100 - fixedPct - varPct);
 
   return (
     <div className="space-y-6">
@@ -276,14 +305,14 @@ export default function HealthScorePage() {
         <div>
           <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-teal-500/10 text-teal-700 dark:text-teal-300 text-[11px] font-semibold mb-2">
             <ShieldCheck className="w-3.5 h-3.5" />
-            SCHUFA-Basisscore & Bonitäts-Analyse Motoru
+            Aylık Gelir-Gider Dengesi & SCHUFA-Tarzı Finansal Sağlık Analizi
           </div>
           <h1 className="text-2xl font-bold flex items-center gap-2.5">
             <Award className="w-6 h-6 text-teal-600" />
-            Finanz-Score & Finansal Sağlık Merkezi
+            Aylık Finansal Sağlık & Skor Merkezi
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Tüm gelir, gider, sabit sözleşme, fatura ve Home Assistant enerji verilerinizden hesaplanan canlı finansal sağlık puanınız, pozitif/negatif etkenler ve skor artırma tavsiyeleri.
+            Aylık gelir ve gider dengeniz, sabit sözleşme yükünüz, tasarruf oranınız (50/30/20 kuralı) ve bütçenizi iyileştirecek kişisel tavsiyeler.
           </p>
         </div>
 
@@ -300,17 +329,17 @@ export default function HealthScorePage() {
         </button>
       </div>
 
-      {/* HERO ROW: Left = SCHUFA Score Gauge Card, Right = 5 Weighted Sub-Scores */}
+      {/* HERO ROW: Left = SCHUFA Score Gauge Card, Right = 5 Monthly Income/Expense Sub-Scores */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* SCHUFA Score Main Gauge Card */}
         <div className="lg:col-span-5 rounded-3xl border border-slate-200 dark:border-slate-800 bg-gradient-to-br from-slate-900 via-slate-900 to-teal-950 text-white p-6 shadow-xl flex flex-col justify-between relative overflow-hidden">
           <div className="flex items-center justify-between">
             <div>
               <span className="text-[11px] uppercase tracking-wider text-teal-300 font-bold">
-                AKATA LIFE • BONITÄTS-SCORE
+                AYLIK GELİR-GİDER SKORU
               </span>
               <h2 className="text-lg font-bold mt-0.5">
-                SCHUFA-Tarzı Basisscore
+                Finansal Sağlık Endeksi
               </h2>
             </div>
             <div className="px-3 py-1.5 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 font-extrabold text-lg">
@@ -365,19 +394,29 @@ export default function HealthScorePage() {
                 {data.score.ratingLabelTr}
               </div>
               <p className="text-xs text-slate-300 leading-relaxed">
-                {data.score.ratingLabelDe}. Bu skor; ödeme disiplininiz, aylık tasarruf oranınız, sabit sözleşme yükünüz ve ev enerji verimliliğinizin ağırlıklı ortalamasıdır.
+                Bu skor doğrudan <strong>aylık geliriniz</strong>, <strong>sabit sözleşme ve değişken giderleriniz</strong> ile <strong>aylık tasarruf oranınız</strong> üzerinden hesaplanır.
               </p>
               <div className="grid grid-cols-2 gap-2 pt-1 text-left">
                 <div className="rounded-xl bg-white/5 border border-white/10 p-2.5">
-                  <div className="text-[10px] text-slate-400">Aylık Net Akış</div>
-                  <div className="text-xs font-bold text-emerald-300 mt-0.5">
+                  <div className="text-[10px] text-slate-400">
+                    Aylık Net Kalan
+                  </div>
+                  <div
+                    className={`text-xs font-bold mt-0.5 ${
+                      data.metrics.netMonthlyCashflowCents >= 0
+                        ? "text-emerald-300"
+                        : "text-rose-300"
+                    }`}
+                  >
                     {data.metrics.netMonthlyCashflowFormattedDe}
                   </div>
                 </div>
                 <div className="rounded-xl bg-white/5 border border-white/10 p-2.5">
-                  <div className="text-[10px] text-slate-400">Sabit Sözleşme Yükü</div>
+                  <div className="text-[10px] text-slate-400">
+                    Tasarruf Oranı
+                  </div>
                   <div className="text-xs font-bold text-teal-300 mt-0.5">
-                    %{data.metrics.fixedCostRatioPercent.toFixed(1)} ({data.metrics.activeContractsCount} Adet)
+                    %{data.metrics.savingsRatePercent.toFixed(1)} (Hedef %20)
                   </div>
                 </div>
               </div>
@@ -387,10 +426,10 @@ export default function HealthScorePage() {
           {/* SCHUFA Color Scale Bar */}
           <div className="space-y-1.5 pt-2 border-t border-white/10">
             <div className="flex justify-between text-[10px] text-slate-300 font-medium">
-              <span>Kritik (&lt;%80)</span>
-              <span>Orta (%89)</span>
-              <span>İyi (%93,5)</span>
-              <span>Mükemmel (&gt;%96,5)</span>
+              <span>Bütçe Açığı (&lt;%80)</span>
+              <span>Dengeli (%88)</span>
+              <span>Çok İyi (%92,5)</span>
+              <span>Mükemmel (&gt;%96)</span>
             </div>
             <div className="relative h-3 rounded-full bg-gradient-to-r from-rose-500 via-amber-400 via-60% to-emerald-400">
               <div
@@ -402,19 +441,19 @@ export default function HealthScorePage() {
           </div>
         </div>
 
-        {/* 5 Weighted Sub-Scores Breakdown Card */}
+        {/* Right: 5 Monthly Financial Health Criteria + Monthly Income/Expense Bar */}
         <div className="lg:col-span-7 rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xs flex flex-col justify-between space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
             <div>
               <h2 className="text-base font-bold">
-                Skor Bileşenleri & Ağırlık Dağılımı (5 Ana Kriter)
+                Aylık Finansal Sağlık Kriterleri (Gelir & Gider Odaklı)
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Her alanın toplam finansal sağlık skorunuza etkisi ve mevcut performans puanı (0–100)
+                Aylık bütçe sağlığınızı belirleyen 5 temel gelir/gider göstergesi
               </p>
             </div>
             <span className="text-xs font-bold px-2.5 py-1 rounded-xl bg-teal-500/10 text-teal-700 dark:text-teal-300">
-              Genel Endeks: {data.score.composite100}/100
+              Bütçe Endeksi: {data.score.composite100}/100
             </span>
           </div>
 
@@ -430,19 +469,17 @@ export default function HealthScorePage() {
                       Ağırlık: %{sub.weightPercent}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`text-xs font-extrabold ${
-                        sub.score >= 85
-                          ? "text-emerald-600 dark:text-emerald-400"
-                          : sub.score >= 70
-                            ? "text-teal-600 dark:text-teal-400"
-                            : "text-amber-600 dark:text-amber-400"
-                      }`}
-                    >
-                      {sub.score} / 100 Puan
-                    </span>
-                  </div>
+                  <span
+                    className={`text-xs font-extrabold ${
+                      sub.score >= 85
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : sub.score >= 70
+                          ? "text-teal-600 dark:text-teal-400"
+                          : "text-amber-600 dark:text-amber-400"
+                    }`}
+                  >
+                    {sub.score} / 100 Puan
+                  </span>
                 </div>
 
                 <div className="w-full h-2.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
@@ -461,41 +498,84 @@ export default function HealthScorePage() {
             ))}
           </div>
 
-          {/* Quick Financial Snapshot Bar */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
-            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/50 p-3">
-              <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                <Wallet className="w-3 h-3 text-emerald-600" /> Aylık Gelir
-              </div>
-              <div className="text-sm font-bold mt-0.5">
-                {data.metrics.monthlyIncomeFormattedDe}
-              </div>
+          {/* 50 / 30 / 20 Monthly Income vs Expense Visual Breakdown */}
+          <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold flex items-center gap-1.5">
+                <PieChart className="w-3.5 h-3.5 text-teal-600" />
+                Aylık Gelir-Gider Dağılımı (50/30/20 Bütçe Röntgeni)
+              </span>
+              <span className="text-[11px] text-slate-500">
+                Toplam Gider: <strong>{data.metrics.totalMonthlyOutflowFormattedDe}</strong> / Gelir: <strong>{data.metrics.monthlyIncomeFormattedDe}</strong>
+              </span>
             </div>
-            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/50 p-3">
-              <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                <FileSignature className="w-3 h-3 text-indigo-600" /> Sabit Sözleşmeler
-              </div>
-              <div className="text-sm font-bold mt-0.5">
-                {data.metrics.monthlyContractLoadFormattedDe}
-              </div>
+
+            <div className="w-full h-3 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden flex">
+              <div
+                className="bg-indigo-500 h-full transition-all"
+                style={{ width: `${fixedPct}%` }}
+                title={`Sabit Sözleşmeler: %${fixedPct.toFixed(1)}`}
+              />
+              <div
+                className="bg-amber-500 h-full transition-all"
+                style={{ width: `${varPct}%` }}
+                title={`Değişken Harcamalar: %${varPct.toFixed(1)}`}
+              />
+              <div
+                className="bg-emerald-500 h-full transition-all"
+                style={{ width: `${savePct}%` }}
+                title={`Net Kalan / Tasarruf: %${savePct.toFixed(1)}`}
+              />
             </div>
-            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/50 p-3">
-              <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                <Flame className="w-3 h-3 text-orange-600" /> Isınma & Enerji (HA)
-              </div>
-              <div className="text-sm font-bold mt-0.5">
-                {data.metrics.monthlyEnergyFormattedDe}
-              </div>
-            </div>
-            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/50 p-3">
-              <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                <Receipt className="w-3 h-3 text-teal-600" /> Gecikmiş Fatura
-              </div>
-              <div className="text-sm font-bold mt-0.5">
-                {data.metrics.overdueInvoicesCount === 0
-                  ? "0 Adet (Temiz)"
-                  : `${data.metrics.overdueInvoicesCount} Adet`}
-              </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-[11px]">
+              <Link
+                href="/income"
+                className="p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800 hover:border-emerald-500/50 transition"
+              >
+                <div className="text-slate-400 flex items-center gap-1">
+                  <Wallet className="w-3 h-3 text-emerald-600" /> Aylık Gelir
+                </div>
+                <div className="font-bold text-slate-900 dark:text-white mt-0.5">
+                  {data.metrics.monthlyIncomeFormattedDe}
+                </div>
+              </Link>
+
+              <Link
+                href="/contracts"
+                className="p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800 hover:border-indigo-500/50 transition"
+              >
+                <div className="text-slate-400 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-indigo-500" /> Sabit Sözleşme (%{fixedPct.toFixed(0)})
+                </div>
+                <div className="font-bold text-slate-900 dark:text-white mt-0.5">
+                  {data.metrics.monthlyContractLoadFormattedDe}
+                </div>
+              </Link>
+
+              <Link
+                href="/expenses"
+                className="p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800 hover:border-amber-500/50 transition"
+              >
+                <div className="text-slate-400 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" /> Değişken Gider (%{varPct.toFixed(0)})
+                </div>
+                <div className="font-bold text-slate-900 dark:text-white mt-0.5">
+                  {data.metrics.monthlyTxExpenseFormattedDe}
+                </div>
+              </Link>
+
+              <Link
+                href="/energy"
+                className="p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800 hover:border-orange-500/50 transition"
+              >
+                <div className="text-slate-400 flex items-center gap-1">
+                  <Flame className="w-3 h-3 text-orange-500" /> Isınma & Enerji
+                </div>
+                <div className="font-bold text-slate-900 dark:text-white mt-0.5">
+                  {data.metrics.monthlyEnergyFormattedDe}
+                </div>
+              </Link>
             </div>
           </div>
         </div>
@@ -512,10 +592,10 @@ export default function HealthScorePage() {
               </div>
               <div>
                 <h2 className="text-base font-bold text-emerald-950 dark:text-emerald-200">
-                  Finansal Durumu Pozitif Etkileyen Alanlar
+                  Aylık Finansal Sağlığı Pozitif Etkileyen Alanlar
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Skorunuzu yukarı taşıyan güçlü finansal alışkanlıklarınız ({data.positiveFactors.length})
+                  Gelir-gider dengenizi ve skorunuzu güçlendiren noktalar ({data.positiveFactors.length})
                 </p>
               </div>
             </div>
@@ -560,7 +640,7 @@ export default function HealthScorePage() {
           </div>
         </div>
 
-        {/* Right: Negative / Risk Factors */}
+        {/* Right: Negative / Improvement Areas */}
         <div className="rounded-3xl border border-rose-200/80 dark:border-rose-900/50 bg-white dark:bg-slate-900 p-6 space-y-4 shadow-xs">
           <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
             <div className="flex items-center gap-2.5">
@@ -569,10 +649,10 @@ export default function HealthScorePage() {
               </div>
               <div>
                 <h2 className="text-base font-bold text-rose-950 dark:text-rose-200">
-                  Negatif Etkileyen & İyileştirilebilir Alanlar
+                  Aylık Bütçeyi Negatif Etkileyen & İyileştirilebilir Alanlar
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Skorunuzu baskılayan veya dikkat gerektiren risk noktaları ({data.negativeFactors.length})
+                  Gider yükü oluşturan veya tasarruf fırsatı barındıran noktalar ({data.negativeFactors.length})
                 </p>
               </div>
             </div>
@@ -608,7 +688,7 @@ export default function HealthScorePage() {
                         href={f.actionUrl}
                         className="inline-flex items-center gap-1 text-xs font-bold text-rose-600 dark:text-rose-400 hover:underline"
                       >
-                        {f.actionLabel || "Hemen Düzelt"}
+                        {f.actionLabel || "İyileştir"}
                         <ArrowUpRight className="w-3.5 h-3.5" />
                       </Link>
                     )}
@@ -620,17 +700,17 @@ export default function HealthScorePage() {
             <div className="rounded-2xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/20 p-8 text-center space-y-2">
               <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto" />
               <div className="text-sm font-bold">
-                Harika! Hiçbir Negatif Risk Faktörü Tespit Edilmedi
+                Harika! Aylık Gelir-Gider Dengenizde Negatif Etken Görünmüyor
               </div>
               <p className="text-xs text-slate-500">
-                Tüm faturalarınız, sözleşmeleriniz ve nakit akışınız ideal sınırlar içinde.
+                Sabit sözleşmeleriniz, değişken harcamalarınız ve tasarruf oranınız ideal sınırlar içinde.
               </p>
             </div>
           )}
         </div>
       </div>
 
-      {/* INTERACTIVE WHAT-IF SCORE SIMULATOR */}
+      {/* INTERACTIVE MONTHLY BUDGET & SCORE SIMULATOR */}
       {simulated && (
         <div className="rounded-3xl border border-teal-200 dark:border-teal-900/60 bg-gradient-to-br from-teal-50/60 via-white to-emerald-50/40 dark:from-teal-950/25 dark:via-slate-900 dark:to-slate-900 p-6 shadow-xs space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200/70 dark:border-slate-800 pb-4">
@@ -640,15 +720,15 @@ export default function HealthScorePage() {
               </div>
               <div>
                 <h2 className="text-base font-bold">
-                  İnteraktif SCHUFA-Skor Simülatörü (Senaryo Analizi)
+                  Aylık Gelir-Gider & Skor Simülatörü (Canlı Senaryo Testi)
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Kaydırıcıları hareket ettirerek bütçenizde yapacağınız değişikliklerin skorunuzu nasıl artıracağını canlı test edin.
+                  Aylık giderlerinizi azalttığınızda veya gelirinizi artırdığınızda skorunuzun ve yıllık birikiminizin nasıl değişeceğini test edin.
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-3 bg-white dark:bg-slate-800 px-4 py-2.5 rounded-2xl border border-teal-200 dark:border-teal-800 shadow-xs">
+            <div className="flex flex-wrap items-center gap-3 bg-white dark:bg-slate-800 px-4 py-2.5 rounded-2xl border border-teal-200 dark:border-teal-800 shadow-xs">
               <div>
                 <div className="text-[10px] text-slate-400 font-semibold uppercase">
                   Simüle Edilen Yeni Skor
@@ -662,6 +742,16 @@ export default function HealthScorePage() {
                   </span>
                 </div>
               </div>
+              {simulated.totalMonthlyGainEur > 0 && (
+                <div className="pl-3 border-l border-slate-200 dark:border-slate-700">
+                  <div className="text-[10px] text-slate-400 font-semibold uppercase">
+                    Ek Yıllık Kazanç
+                  </div>
+                  <div className="text-sm font-black text-emerald-600 dark:text-emerald-400">
+                    +{simulated.yearlyExtraSavingsEur.toLocaleString("de-DE")} € / Yıl
+                  </div>
+                </div>
+              )}
               {simulated.bonusPoints > 0 && (
                 <span className="px-2.5 py-1 rounded-xl bg-emerald-500 text-white text-xs font-extrabold">
                   +{simulated.bonusPoints} Puan
@@ -674,33 +764,33 @@ export default function HealthScorePage() {
             <div className="space-y-4">
               <div>
                 <div className="flex justify-between text-xs font-semibold mb-1.5">
-                  <span>Aylık Sabit Sözleşme / Harcama Tasarrufu</span>
+                  <span>Aylık Değişken Harcama Tasarrufu (Market, Alışveriş vb.)</span>
                   <span className="text-teal-600 font-bold">
-                    +{simMonthlyCutEur} € / Ay ({simMonthlyCutEur * 12} € / Yıl)
+                    -{simExpenseCutEur} € / Ay (+{simExpenseCutEur * 12} € / Yıl)
                   </span>
                 </div>
                 <input
                   type="range"
                   min={0}
-                  max={400}
+                  max={500}
                   step={10}
-                  value={simMonthlyCutEur}
-                  onChange={(e) => setSimMonthlyCutEur(Number(e.target.value))}
+                  value={simExpenseCutEur}
+                  onChange={(e) => setSimExpenseCutEur(Number(e.target.value))}
                   className="w-full accent-teal-600 cursor-pointer"
                 />
                 <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
                   <span>0 €</span>
-                  <span>100 €</span>
-                  <span>200 €</span>
-                  <span>400 €</span>
+                  <span>150 €</span>
+                  <span>300 €</span>
+                  <span>500 €</span>
                 </div>
               </div>
 
               <div>
                 <div className="flex justify-between text-xs font-semibold mb-1.5">
-                  <span>Aylık Ek Gelir / Maaş Artışı</span>
+                  <span>Aylık Gelir Artışı (Maaş / Ek Gelir)</span>
                   <span className="text-teal-600 font-bold">
-                    +{simExtraIncomeEur} € / Ay
+                    +{simIncomeBoostEur} € / Ay
                   </span>
                 </div>
                 <input
@@ -708,8 +798,8 @@ export default function HealthScorePage() {
                   min={0}
                   max={1500}
                   step={50}
-                  value={simExtraIncomeEur}
-                  onChange={(e) => setSimExtraIncomeEur(Number(e.target.value))}
+                  value={simIncomeBoostEur}
+                  onChange={(e) => setSimIncomeBoostEur(Number(e.target.value))}
                   className="w-full accent-teal-600 cursor-pointer"
                 />
                 <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
@@ -726,21 +816,21 @@ export default function HealthScorePage() {
                 <div className="flex items-center gap-2.5">
                   <input
                     type="checkbox"
-                    checked={simPayOverdue}
-                    onChange={(e) => setSimPayOverdue(e.target.checked)}
+                    checked={simContractDiscount15}
+                    onChange={(e) => setSimContractDiscount15(e.target.checked)}
                     className="rounded border-slate-300 text-teal-600"
                   />
                   <div>
                     <div className="text-xs font-bold">
-                      Tüm Açık/Gecikmiş Faturaları Otomatik Ödemeye Al
+                      Sabit Sözleşmelerde %15 Tarife İndirimi / Değişimi
                     </div>
                     <div className="text-[11px] text-slate-500">
-                      Ödeme disiplini kriterini maksimum puana taşır
+                      Elektrik, internet ve sigorta sözleşmelerinde tarife optimizasyonu
                     </div>
                   </div>
                 </div>
-                <span className="text-xs font-bold text-emerald-600">
-                  +{data.metrics.overdueInvoicesCount > 0 ? Math.min(60, data.metrics.overdueInvoicesCount * 22) : 0} Puan
+                <span className="text-xs font-bold text-emerald-600 shrink-0">
+                  +18 Puan
                 </span>
               </label>
 
@@ -754,14 +844,14 @@ export default function HealthScorePage() {
                   />
                   <div>
                     <div className="text-xs font-bold">
-                      Viessmann Vitodens Gece & Sıcak Su Optimizasyonu (%12 Tasarruf)
+                      Ev Isınma & Sıcak Su Giderinde %14 Tasarruf (Home Assistant)
                     </div>
                     <div className="text-[11px] text-slate-500">
-                      Home Assistant üzerinden kombi saatlerini optimize et
+                      Gece sıcaklık düşürme ve sıcak su saat optimizasyonu
                     </div>
                   </div>
                 </div>
-                <span className="text-xs font-bold text-emerald-600">
+                <span className="text-xs font-bold text-emerald-600 shrink-0">
                   +14 Puan
                 </span>
               </label>
@@ -770,16 +860,16 @@ export default function HealthScorePage() {
         </div>
       )}
 
-      {/* ACTIONABLE SCORE-BOOSTER RECOMMENDATIONS */}
+      {/* ACTIONABLE MONTHLY FINANCIAL IMPROVEMENT RECOMMENDATIONS */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-bold flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-teal-600" />
-              Kişiselleştirilmiş Skor Artırma & Tasarruf Tavsiyeleri (Score-Booster)
+              Aylık Finansal Sağlığı İyileştirme & Tasarruf Tavsiyeleri
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Aşağıdaki adımları uygulayarak hem finansal sağlık skorunuzu yükseltebilir hem de yıllık net tasarrufunuzu artırabilirsiniz.
+              Gelir-gider dengenizi güçlendirecek, sabit yükünüzü azaltacak ve aylık net birikiminizi artıracak somut adımlar.
             </p>
           </div>
           <Link
@@ -811,17 +901,15 @@ export default function HealthScorePage() {
                       }`}
                     >
                       {rec.priority === "CRITICAL"
-                        ? "Kritik Öncelik"
+                        ? "Öncelikli Adım"
                         : rec.priority === "HIGH"
-                          ? "Yüksek Etki"
-                          : "Önerilen Adım"}
+                          ? "Yüksek Bütçe Etkisi"
+                          : "Önerilen İyileştirme"}
                     </span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
-                        +{rec.potentialScoreGainPoints} Puan (+%
-                        {rec.potentialScoreGainPercent})
-                      </span>
-                    </div>
+                    <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                      +{rec.potentialScoreGainPoints} Puan (+%
+                      {rec.potentialScoreGainPercent})
+                    </span>
                   </div>
 
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white">
@@ -834,7 +922,7 @@ export default function HealthScorePage() {
                   {rec.actionSteps.length > 0 && (
                     <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-3 space-y-1.5">
                       <div className="text-[11px] font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1">
-                        <Info className="w-3.5 h-3.5 text-teal-600" /> Nasıl Uygulanır?
+                        <Info className="w-3.5 h-3.5 text-teal-600" /> Uygulanacak Adımlar
                       </div>
                       <ul className="space-y-1 text-[11px] text-slate-600 dark:text-slate-300 list-disc list-inside">
                         {rec.actionSteps.map((step, i) => (
@@ -848,10 +936,10 @@ export default function HealthScorePage() {
                 <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="text-[10px] text-slate-400">
-                      Tahmini Yıllık Kazanç
+                      Bütçeye Katkısı
                     </div>
                     <div className="text-sm font-extrabold text-emerald-600 dark:text-emerald-400">
-                      {rec.estimatedYearlySavingsFormattedDe} / Yıl{" "}
+                      {rec.estimatedYearlySavingsFormattedDe}{" "}
                       <span className="text-[11px] font-normal text-slate-400">
                         ({rec.estimatedMonthlySavingsFormattedDe}/Ay)
                       </span>

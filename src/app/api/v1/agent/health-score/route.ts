@@ -17,15 +17,15 @@ export interface ScoreFactor {
   id: string;
   type: "POSITIVE" | "NEGATIVE";
   category:
-    | "PAYMENT_HISTORY"
-    | "CASHFLOW_SAVINGS"
-    | "CONTRACT_LOAD"
-    | "ENERGY_SMART_HOME"
-    | "WEALTH_OPTIMIZATION";
+    | "INCOME_EXPENSE_BALANCE"
+    | "SAVINGS_RATE"
+    | "FIXED_COSTS"
+    | "VARIABLE_SPENDING"
+    | "ENERGY_OPTIMIZATION";
   title: string;
   description: string;
-  impactPoints: number; // e.g. +30 or -20
-  impactPercent: number; // e.g. +1.2 or -0.8
+  impactPoints: number;
+  impactPercent: number;
   metricBadge: string;
   actionLabel?: string;
   actionUrl?: string;
@@ -62,8 +62,6 @@ export async function GET(req: NextRequest) {
     const [
       allTransactions,
       activeContracts,
-      invoices,
-      reminders,
       adviceList,
       haConfig,
       haPlugin,
@@ -77,14 +75,6 @@ export async function GET(req: NextRequest) {
         where: { userId: actor.userId, status: "ACTIVE", archivedAt: null },
         orderBy: { amountCents: "desc" },
       }),
-      prisma.invoice.findMany({
-        where: { userId: actor.userId },
-        orderBy: { dueDate: "asc" },
-      }),
-      prisma.reminder.findMany({
-        where: { userId: actor.userId, completedAt: null },
-        orderBy: { dueAt: "asc" },
-      }),
       prisma.agentAdvice.findMany({
         where: { userId: actor.userId },
         orderBy: { createdAt: "desc" },
@@ -93,41 +83,70 @@ export async function GET(req: NextRequest) {
       prisma.pluginIntegration.findFirst({ where: { slug: "home-assistant" } }),
     ]);
 
-    // 1. Monthly Income & Expenses (use current month, or fallback to latest months average if current month is empty)
+    // 1. Monthly Income & Expenses (use current month, or average of recorded months if current month has no entries yet)
     const currentMonthTx = allTransactions.filter((t: any) => {
       const d = new Date(t.transactionDate);
       return d >= monthStart && d <= monthEnd;
     });
 
-    const txPool = currentMonthTx.length > 0 ? currentMonthTx : allTransactions;
-    const monthDivisor =
-      currentMonthTx.length > 0
-        ? 1
-        : Math.max(
-            1,
-            new Set(
-              allTransactions.map((t: any) => {
-                const d = new Date(t.transactionDate);
-                return `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
-              })
-            ).size
-          );
+    const incomePool =
+      currentMonthTx.some((t: any) => t.type === "INCOME")
+        ? currentMonthTx.filter((t: any) => t.type === "INCOME")
+        : allTransactions.filter((t: any) => t.type === "INCOME");
+
+    const incomeMonthsCount = Math.max(
+      1,
+      new Set(
+        incomePool.map((t: any) => {
+          const d = new Date(t.transactionDate);
+          return `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
+        })
+      ).size
+    );
+
+    const expensePool =
+      currentMonthTx.some((t: any) => t.type === "EXPENSE")
+        ? currentMonthTx.filter((t: any) => t.type === "EXPENSE")
+        : allTransactions.filter((t: any) => t.type === "EXPENSE");
+
+    const expenseMonthsCount = Math.max(
+      1,
+      new Set(
+        expensePool.map((t: any) => {
+          const d = new Date(t.transactionDate);
+          return `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
+        })
+      ).size
+    );
 
     const monthlyIncomeCents = Math.round(
-      sumCents(
-        txPool
-          .filter((t: any) => t.type === "INCOME")
-          .map((t: any) => Number(t.amountCents ?? 0))
-      ) / monthDivisor
+      sumCents(incomePool.map((t: any) => Number(t.amountCents ?? 0))) /
+        incomeMonthsCount
     );
 
-    const monthlyTxExpenseCents = Math.round(
-      sumCents(
-        txPool
-          .filter((t: any) => t.type === "EXPENSE")
-          .map((t: any) => Number(t.amountCents ?? 0))
-      ) / monthDivisor
+    const monthlyVariableExpenseCents = Math.round(
+      sumCents(expensePool.map((t: any) => Number(t.amountCents ?? 0))) /
+        expenseMonthsCount
     );
+
+    // Group variable expenses by category to find top spending category
+    const categoryTotals = new Map<string, number>();
+    for (const tx of expensePool) {
+      const cat = String(tx.category || "Genel Harcama");
+      const monthlyShare = Math.round(
+        Number(tx.amountCents ?? 0) / expenseMonthsCount
+      );
+      categoryTotals.set(cat, (categoryTotals.get(cat) ?? 0) + monthlyShare);
+    }
+    const sortedExpenseCategories = Array.from(categoryTotals.entries())
+      .map(([category, amountCents]) => ({
+        category,
+        amountCents,
+        amountFormattedDe: formatEurCents(amountCents, "de"),
+      }))
+      .sort((a, b) => b.amountCents - a.amountCents);
+
+    const topExpenseCategory = sortedExpenseCategories[0] ?? null;
 
     // 2. Fixed Contracts Monthly Load
     const monthlyContractLoadCents = sumCents(
@@ -139,7 +158,7 @@ export async function GET(req: NextRequest) {
       )
     );
 
-    // 3. Home Assistant Energy Metrics (optional live check with short timeout)
+    // 3. Home Assistant Energy Metrics (live monthly heating + hot water cost)
     let energyConnected = false;
     let monthlyHeatingAndWaterEur = 0;
     const haBaseUrl = normalizeHomeAssistantBaseUrl(
@@ -168,19 +187,13 @@ export async function GET(req: NextRequest) {
           entityIds: [
             "sensor.heizung_kosten_monat",
             "sensor.warmwasser_kosten_monat",
-            "sensor.heizung_kosten_heute",
-            "sensor.warmwasser_kosten_heute",
           ],
           timeoutMs: 3500,
         });
         if (haRes.ok) {
           energyConnected = true;
           for (const s of haRes.sensors) {
-            if (
-              s.isAvailable &&
-              s.numericValue !== null &&
-              s.entityId.includes("monat")
-            ) {
+            if (s.isAvailable && s.numericValue !== null) {
               monthlyHeatingAndWaterEur += s.numericValue;
             }
           }
@@ -190,16 +203,14 @@ export async function GET(req: NextRequest) {
 
     const monthlyEnergyCents = Math.round(monthlyHeatingAndWaterEur * 100);
 
-    // Total monthly outflow (avoid double counting if expenses already include contracts, use max or combined smartly)
-    const totalMonthlyOutflowCents =
-      monthlyTxExpenseCents + monthlyContractLoadCents;
-    const effectiveIncomeCents =
-      monthlyIncomeCents > 0
-        ? monthlyIncomeCents
-        : Math.max(totalMonthlyOutflowCents, 0);
+    // 4. Total Monthly Expenses (Fixed Contracts + Variable Expenses)
+    const totalMonthlyExpenseCents =
+      monthlyVariableExpenseCents + monthlyContractLoadCents;
 
     const netMonthlyCashflowCents =
-      monthlyIncomeCents - totalMonthlyOutflowCents;
+      monthlyIncomeCents - totalMonthlyExpenseCents;
+
+    // Ratios (% of monthly income)
     const savingsRatePercent =
       monthlyIncomeCents > 0
         ? Math.round((netMonthlyCashflowCents * 1000) / monthlyIncomeCents) / 10
@@ -209,37 +220,39 @@ export async function GET(req: NextRequest) {
       monthlyIncomeCents > 0
         ? Math.round((monthlyContractLoadCents * 1000) / monthlyIncomeCents) /
           10
-        : activeContracts.length > 0
-          ? 45
+        : totalMonthlyExpenseCents > 0
+          ? Math.round(
+              (monthlyContractLoadCents * 1000) / totalMonthlyExpenseCents
+            ) / 10
           : 0;
 
-    // 4. Invoices & Reminders Discipline
-    const overdueInvoices = invoices.filter((inv: any) => {
-      if (inv.status === "PAID") return false;
-      if (inv.status === "OVERDUE") return true;
-      return inv.dueDate && new Date(inv.dueDate) < now;
-    });
-    const unpaidInvoices = invoices.filter(
-      (inv: any) => inv.status === "UNPAID" || inv.status === "PLANNED"
-    );
-    const paidInvoices = invoices.filter((inv: any) => inv.status === "PAID");
+    const variableCostRatioPercent =
+      monthlyIncomeCents > 0
+        ? Math.round(
+            (monthlyVariableExpenseCents * 1000) / monthlyIncomeCents
+          ) / 10
+        : totalMonthlyExpenseCents > 0
+          ? Math.round(
+              (monthlyVariableExpenseCents * 1000) / totalMonthlyExpenseCents
+            ) / 10
+          : 0;
 
-    const overdueReminders = reminders.filter(
-      (r: any) => r.dueAt && new Date(r.dueAt) < now
-    );
+    const totalExpenseToIncomePercent =
+      monthlyIncomeCents > 0
+        ? Math.round((totalMonthlyExpenseCents * 1000) / monthlyIncomeCents) /
+          10
+        : totalMonthlyExpenseCents > 0
+          ? 100
+          : 0;
 
-    // 5. Contracts nearing cancellation deadline or missing cancellation deadline
+    // 5. Expiring contracts & Savings Advice
     const sixtyDaysFromNow = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000);
     const expiringSoonContracts = activeContracts.filter((c: any) => {
       if (!c.cancellationDeadline) return false;
       const d = new Date(c.cancellationDeadline);
       return d >= now && d <= sixtyDaysFromNow;
     });
-    const contractsWithoutDeadline = activeContracts.filter(
-      (c: any) => !c.cancellationDeadline && c.autoRenew
-    );
 
-    // 6. Savings & Advice Metrics
     const openAdvice = adviceList.filter(
       (a: any) => a.status === "OPEN" || a.status === "IN_PROGRESS"
     );
@@ -252,84 +265,86 @@ export async function GET(req: NextRequest) {
     );
 
     // =========================================================================
-    // SUB-SCORES CALCULATION (Each 0..100)
+    // 5 MONTHLY FINANCIAL HEALTH SUB-SCORES (0..100, 100% Income/Expense Driven)
     // =========================================================================
 
-    // A) Payment Discipline (Zahlungsverhalten - Weight 30%)
-    let paymentScore = 98;
-    if (overdueInvoices.length > 0) {
-      paymentScore -= Math.min(60, overdueInvoices.length * 22);
-    }
-    if (overdueReminders.length > 0) {
-      paymentScore -= Math.min(25, overdueReminders.length * 8);
-    }
-    if (paidInvoices.length >= 3 && overdueInvoices.length === 0) {
-      paymentScore = Math.min(100, paymentScore + 2);
-    }
-    paymentScore = Math.max(15, Math.min(100, paymentScore));
-
-    // B) Cashflow & Savings Rate (Sparquote & Liquidität - Weight 25%)
-    let cashflowScore = 75;
-    if (monthlyIncomeCents === 0 && totalMonthlyOutflowCents === 0) {
-      cashflowScore = 70;
-    } else if (monthlyIncomeCents === 0 && totalMonthlyOutflowCents > 0) {
-      cashflowScore = 45;
-    } else if (savingsRatePercent >= 25) {
-      cashflowScore = 98;
-    } else if (savingsRatePercent >= 15) {
-      cashflowScore = 90;
-    } else if (savingsRatePercent >= 5) {
-      cashflowScore = 78;
-    } else if (savingsRatePercent >= 0) {
-      cashflowScore = 65;
+    // 1. Gelir / Gider Dengesi & Net Nakit Akışı (Weight: 35%)
+    let balanceScore = 75;
+    if (monthlyIncomeCents === 0 && totalMonthlyExpenseCents === 0) {
+      balanceScore = 70;
+    } else if (monthlyIncomeCents === 0 && totalMonthlyExpenseCents > 0) {
+      balanceScore = 42;
+    } else if (totalExpenseToIncomePercent <= 65) {
+      balanceScore = 98;
+    } else if (totalExpenseToIncomePercent <= 80) {
+      balanceScore = 90;
+    } else if (totalExpenseToIncomePercent <= 92) {
+      balanceScore = 78;
+    } else if (totalExpenseToIncomePercent <= 100) {
+      balanceScore = 64;
     } else {
-      cashflowScore = Math.max(20, Math.round(55 + savingsRatePercent * 0.8));
+      // Expenses exceed income
+      balanceScore = Math.max(
+        20,
+        Math.round(60 - (totalExpenseToIncomePercent - 100) * 0.9)
+      );
     }
 
-    // C) Contract & Fixed Cost Load (Fixkosten & Verträge - Weight 20%)
-    let contractScore = 88;
-    if (fixedCostRatioPercent > 60) {
-      contractScore -= 35;
-    } else if (fixedCostRatioPercent > 45) {
-      contractScore -= 18;
-    } else if (fixedCostRatioPercent > 0 && fixedCostRatioPercent <= 30) {
-      contractScore += 8;
-    }
-    if (expiringSoonContracts.length > 0) {
-      contractScore -= Math.min(18, expiringSoonContracts.length * 6);
-    }
-    if (contractsWithoutDeadline.length > 2) {
-      contractScore -= 8;
-    }
-    contractScore = Math.max(20, Math.min(100, contractScore));
-
-    // D) Smart Home & Energy Efficiency (Energie & Haushalt - Weight 10%)
-    let energyScore = energyConnected ? 92 : 72;
-    if (energyConnected && monthlyHeatingAndWaterEur > 220) {
-      energyScore = 68;
-    } else if (energyConnected && monthlyHeatingAndWaterEur <= 120) {
-      energyScore = 96;
+    // 2. Aylık Tasarruf & Birikim Oranı - 50/30/20 Kuralı (Weight: 25%)
+    let savingsScore = 72;
+    if (monthlyIncomeCents > 0) {
+      if (savingsRatePercent >= 25) savingsScore = 98;
+      else if (savingsRatePercent >= 20) savingsScore = 93;
+      else if (savingsRatePercent >= 12) savingsScore = 84;
+      else if (savingsRatePercent >= 5) savingsScore = 72;
+      else if (savingsRatePercent >= 0) savingsScore = 58;
+      else savingsScore = 35;
+    } else {
+      savingsScore = 50;
     }
 
-    // E) Wealth & Optimization Activity (Vermögensaufbau & Optimierung - Weight 15%)
-    let optimizationScore = 76;
+    // 3. Sabit Gider & Sözleşme Yükü Oranı (Weight: 20%)
+    let fixedCostScore = 88;
+    if (monthlyIncomeCents > 0) {
+      if (fixedCostRatioPercent <= 30) fixedCostScore = 96;
+      else if (fixedCostRatioPercent <= 45) fixedCostScore = 88;
+      else if (fixedCostRatioPercent <= 55) fixedCostScore = 74;
+      else fixedCostScore = 52;
+    } else if (monthlyContractLoadCents > 80000) {
+      fixedCostScore = 65;
+    } else {
+      fixedCostScore = 82;
+    }
+
+    // 4. Değişken Harcama & Tüketim Dengesi (Weight: 10%)
+    let variableSpendingScore = 86;
+    if (monthlyIncomeCents > 0) {
+      if (variableCostRatioPercent <= 25) variableSpendingScore = 95;
+      else if (variableCostRatioPercent <= 35) variableSpendingScore = 85;
+      else if (variableCostRatioPercent <= 50) variableSpendingScore = 70;
+      else variableSpendingScore = 50;
+    }
+
+    // 5. Enerji Verimliliği & Tasarruf Optimizasyonu (Weight: 10%)
+    let optimizationScore = 80;
+    if (energyConnected) optimizationScore += 8;
     if (appliedAdvice.length > 0) {
-      optimizationScore += Math.min(20, appliedAdvice.length * 7);
+      optimizationScore += Math.min(12, appliedAdvice.length * 5);
     }
-    if (openAdvice.length > 3 && appliedAdvice.length === 0) {
-      optimizationScore -= 10;
+    if (monthlyHeatingAndWaterEur > 180) {
+      optimizationScore -= 12;
     }
-    optimizationScore = Math.max(30, Math.min(100, optimizationScore));
+    optimizationScore = Math.max(40, Math.min(100, optimizationScore));
 
     // Weighted Composite Score (0..100)
     const composite100 =
-      paymentScore * 0.3 +
-      cashflowScore * 0.25 +
-      contractScore * 0.2 +
-      energyScore * 0.1 +
-      optimizationScore * 0.15;
+      balanceScore * 0.35 +
+      savingsScore * 0.25 +
+      fixedCostScore * 0.2 +
+      variableSpendingScore * 0.1 +
+      optimizationScore * 0.1;
 
-    // SCHUFA Basisscore style (e.g. 50.0% to 99.8%)
+    // SCHUFA Basisscore style (50.0% to 99.8%)
     const schufaPercent =
       Math.round(
         Math.max(50, Math.min(99.8, 55 + composite100 * 0.445)) * 100
@@ -340,232 +355,222 @@ export async function GET(req: NextRequest) {
       Math.max(100, Math.min(900, 100 + composite100 * 8))
     );
 
-    // Rating Class & Label
     let ratingClass = "A";
-    let ratingLabelDe = "Hervorragende Bonität & Finanzgesundheit";
-    let ratingLabelTr = "Mükemmel Finansal Sağlık (Çok Düşük Risk)";
+    let ratingLabelDe = "Sehr gute monatliche Finanzgesundheit";
+    let ratingLabelTr = "Çok İyi Aylık Gelir-Gider Dengesi";
     let riskLevel: "VERY_LOW" | "LOW" | "MODERATE" | "ELEVATED" | "HIGH" =
-      "VERY_LOW";
+      "LOW";
 
-    if (schufaPercent >= 96.5) {
+    if (schufaPercent >= 96.0) {
       ratingClass = "A+";
-      ratingLabelDe = "Hervorragend (Bestnote)";
-      ratingLabelTr = "Mükemmel Finansal Sağlık (En Üst Seviye)";
+      ratingLabelDe = "Hervorragende Einnahmen-Ausgaben-Struktur";
+      ratingLabelTr = "Mükemmel Aylık Finansal Sağlık (Yüksek Tasarruf Gücü)";
       riskLevel = "VERY_LOW";
-    } else if (schufaPercent >= 93.5) {
+    } else if (schufaPercent >= 92.5) {
       ratingClass = "A";
-      ratingLabelDe = "Sehr gut (Geringes Risiko)";
-      ratingLabelTr = "Çok İyi Finansal Sağlık (Güvenli)";
+      ratingLabelDe = "Sehr gute monatliche Finanzgesundheit";
+      ratingLabelTr = "Çok İyi Aylık Gelir-Gider Dengesi";
       riskLevel = "LOW";
-    } else if (schufaPercent >= 89.0) {
+    } else if (schufaPercent >= 87.5) {
       ratingClass = "B";
-      ratingLabelDe = "Gut bis zufriedenstellend";
-      ratingLabelTr = "İyi / Dengeli Finansal Durum";
+      ratingLabelDe = "Solide Haushaltsbilanz mit Sparpotenzial";
+      ratingLabelTr = "Dengeli Aylık Bütçe (İyileştirme Fırsatları Mevcut)";
       riskLevel = "MODERATE";
-    } else if (schufaPercent >= 82.0) {
+    } else if (schufaPercent >= 80.0) {
       ratingClass = "C";
-      ratingLabelDe = "Erhöhter Optimierungsbedarf";
-      ratingLabelTr = "Dikkat Gerektiren Bütçe Yükü";
+      ratingLabelDe = "Hohe Ausgabenquote — Optimierung empfohlen";
+      ratingLabelTr = "Yüksek Gider Yükü — Harcama Optimizasyonu Önerilir";
       riskLevel = "ELEVATED";
     } else {
       ratingClass = "D";
-      ratingLabelDe = "Kritische Belastung";
-      ratingLabelTr = "Yüksek Finansal Risk — Acil Önlem Önerilir";
+      ratingLabelDe = "Monatliches Haushaltsdefizit";
+      ratingLabelTr = "Aylık Gelir-Gider Açığı — Bütçe Dengelenmeli";
       riskLevel = "HIGH";
     }
 
     // =========================================================================
-    // POSITIVE & NEGATIVE FACTORS
+    // POSITIVE & NEGATIVE FACTORS (100% Monthly Income, Expense & Savings Focused)
     // =========================================================================
     const positiveFactors: ScoreFactor[] = [];
     const negativeFactors: ScoreFactor[] = [];
 
-    // 1. Overdue Invoices check
-    if (overdueInvoices.length === 0) {
-      positiveFactors.push({
-        id: "pos-no-overdue-invoices",
-        type: "POSITIVE",
-        category: "PAYMENT_HISTORY",
-        title: "Sıfır Gecikmiş Fatura (Kusursuz Ödeme Sicili)",
-        description:
-          "Vadesi geçmiş hiçbir ödenmemiş faturanız bulunmuyor. SCHUFA tarzı skorlamada en yüksek ağırlığa (%30) sahip kriter tam puan alıyor.",
-        impactPoints: 45,
-        impactPercent: 1.8,
-        metricBadge: `${paidInvoices.length} Ödenmiş / 0 Gecikmiş`,
-        actionLabel: "Faturaları Gör",
-        actionUrl: "/invoices",
-      });
-    } else {
-      const overdueSumCents = sumCents(
-        overdueInvoices.map((i: any) => Number(i.amountCents ?? 0))
-      );
-      negativeFactors.push({
-        id: "neg-overdue-invoices",
-        type: "NEGATIVE",
-        category: "PAYMENT_HISTORY",
-        title: `${overdueInvoices.length} Adet Gecikmiş Fatura Mevcut`,
-        description: `Toplam ${formatEurCents(overdueSumCents, "de")} tutarında vadesi geçmiş fatura görünüyor. Gecikmiş ödemeler finansal sağlık skorunu en sert düşüren etkendir.`,
-        impactPoints: -Math.min(60, overdueInvoices.length * 22),
-        impactPercent: -2.4,
-        metricBadge: formatEurCents(overdueSumCents, "de"),
-        actionLabel: "Hemen Kapat",
-        actionUrl: "/invoices",
-      });
-    }
-
-    // 2. Cashflow & Income check
+    // 1. Income vs Expense Cashflow Factor
     if (monthlyIncomeCents > 0 && netMonthlyCashflowCents > 0) {
       positiveFactors.push({
-        id: "pos-positive-cashflow",
+        id: "pos-monthly-surplus",
         type: "POSITIVE",
-        category: "CASHFLOW_SAVINGS",
-        title: `Pozitif Aylık Nakit Akışı (+${formatEurCents(netMonthlyCashflowCents, "de")})`,
-        description: `Aylık geliriniz (${formatEurCents(monthlyIncomeCents, "de")}), sabit sözleşme ve harcamalarınızı rahatlıkla karşılıyor. Tasarruf oranınız %${savingsRatePercent.toFixed(1)}.`,
-        impactPoints: 35,
-        impactPercent: 1.4,
-        metricBadge: `%${savingsRatePercent.toFixed(1)} Tasarruf Oranı`,
-        actionLabel: "Gelir & Gider Analizi",
+        category: "INCOME_EXPENSE_BALANCE",
+        title: `Aylık Net Bütçe Fazlası (+${formatEurCents(netMonthlyCashflowCents, "de")}/Ay)`,
+        description: `Aylık geliriniz (${formatEurCents(monthlyIncomeCents, "de")}), tüm sabit sözleşme ve değişken giderlerinizin (${formatEurCents(totalMonthlyExpenseCents, "de")}) üzerinde. Her ay net artı değer üretiyorsunuz.`,
+        impactPoints: 45,
+        impactPercent: 1.8,
+        metricBadge: `Gelir: ${formatEurCents(monthlyIncomeCents, "de")} vs Gider: ${formatEurCents(totalMonthlyExpenseCents, "de")}`,
+        actionLabel: "Gelir & Gider Özeti",
         actionUrl: "/finances",
       });
     } else if (monthlyIncomeCents === 0) {
       negativeFactors.push({
-        id: "neg-missing-income",
+        id: "neg-no-income-recorded",
         type: "NEGATIVE",
-        category: "CASHFLOW_SAVINGS",
-        title: "Aylık Düzenli Gelir Kaydı Eksik",
+        category: "INCOME_EXPENSE_BALANCE",
+        title: "Aylık Gelir Kaydı Girilmemiş (Gelir/Gider Oranı Hesaplanamıyor)",
         description:
-          "Sistemde bu aya veya geçmişe ait düzenli gelir (Maaş, Kira Geliri vb.) kaydı bulunamadı veya 0 € görünüyor. Doğru karşılama oranı için gelirlerinizi ekleyin.",
-        impactPoints: -25,
-        impactPercent: -1.1,
-        metricBadge: "Gelir: 0,00 €",
+          "Giderleriniz ve sözleşmeleriniz kayıtlı ancak aylık düzenli geliriniz (Maaş, Ek Gelir vb.) girilmediği için aylık karşılama oranı düşük görünüyor. Gelirinizi eklediğinizde skorunuz anında yükselecektir.",
+        impactPoints: -35,
+        impactPercent: -1.5,
+        metricBadge: "Aylık Gelir: 0,00 €",
         actionLabel: "Gelir Ekle",
         actionUrl: "/income",
       });
     } else if (netMonthlyCashflowCents < 0) {
       negativeFactors.push({
-        id: "neg-negative-cashflow",
+        id: "neg-monthly-deficit",
         type: "NEGATIVE",
-        category: "CASHFLOW_SAVINGS",
-        title: `Aylık Bütçe Açığı (${formatEurCents(netMonthlyCashflowCents, "de")})`,
-        description:
-          "Aylık toplam gider ve sabit sözleşme yükünüz, kayıtlı aylık gelirinizin üzerinde görünüyor.",
-        impactPoints: -35,
-        impactPercent: -1.6,
-        metricBadge: formatEurCents(netMonthlyCashflowCents, "de"),
+        category: "INCOME_EXPENSE_BALANCE",
+        title: `Aylık Bütçe Açığı (${formatEurCents(netMonthlyCashflowCents, "de")}/Ay)`,
+        description: `Aylık toplam giderleriniz (${formatEurCents(totalMonthlyExpenseCents, "de")}), aylık gelirinizi (${formatEurCents(monthlyIncomeCents, "de")}) aşıyor. Değişken giderleri veya sabit sözleşmeleri azaltmak skorunuzu hızla toparlar.`,
+        impactPoints: -40,
+        impactPercent: -1.7,
+        metricBadge: `Gider Oranı: %${totalExpenseToIncomePercent.toFixed(1)}`,
         actionLabel: "Giderleri İncele",
         actionUrl: "/expenses",
       });
     }
 
-    // 3. Contract Load check
-    if (activeContracts.length > 0 && fixedCostRatioPercent <= 35 && monthlyIncomeCents > 0) {
+    // 2. Savings Rate Factor (50/30/20 Rule)
+    if (monthlyIncomeCents > 0 && savingsRatePercent >= 20) {
       positiveFactors.push({
-        id: "pos-healthy-contract-load",
+        id: "pos-strong-savings-rate",
         type: "POSITIVE",
-        category: "CONTRACT_LOAD",
-        title: `Dengeli Sabit Sözleşme Yükü (%${fixedCostRatioPercent.toFixed(1)})`,
-        description: `${activeContracts.length} aktif sözleşmenizin aylık maliyeti (${formatEurCents(monthlyContractLoadCents, "de")}) gelirinizin %35'inin altında, yani güvenli bölgede.`,
-        impactPoints: 24,
-        impactPercent: 0.9,
-        metricBadge: `${formatEurCents(monthlyContractLoadCents, "de")} / Ay`,
+        category: "SAVINGS_RATE",
+        title: `Güçlü Aylık Tasarruf Oranı (%${savingsRatePercent.toFixed(1)})`,
+        description:
+          "50/30/20 finansal sağlık kuralındaki %20 ideal tasarruf hedefini yakaladınız veya aştınız. Bu oran uzun vadeli servet birikimi için en güçlü göstergedir.",
+        impactPoints: 30,
+        impactPercent: 1.2,
+        metricBadge: `Hedef: >=%20 • Siz: %${savingsRatePercent.toFixed(1)}`,
+        actionLabel: "Birikim Hedefleri",
+        actionUrl: "/advisor",
+      });
+    } else if (monthlyIncomeCents > 0 && savingsRatePercent >= 0 && savingsRatePercent < 15) {
+      negativeFactors.push({
+        id: "neg-low-savings-rate",
+        type: "NEGATIVE",
+        category: "SAVINGS_RATE",
+        title: `Düşük Aylık Tasarruf Marjı (%${savingsRatePercent.toFixed(1)})`,
+        description: `Gelirinizin sadece %${savingsRatePercent.toFixed(1)}'i ay sonunda elinizde kalıyor. İdeal finansal sağlık için bu oranı en az %20 seviyesine çıkarmak önerilir.`,
+        impactPoints: -18,
+        impactPercent: -0.7,
+        metricBadge: `Mevcut: %${savingsRatePercent.toFixed(1)} (Hedef: %20)`,
+        actionLabel: "Tasarruf Planı",
+        actionUrl: "/advisor",
+      });
+    }
+
+    // 3. Fixed Cost / Contract Ratio Factor
+    if (monthlyIncomeCents > 0 && fixedCostRatioPercent <= 40) {
+      positiveFactors.push({
+        id: "pos-healthy-fixed-costs",
+        type: "POSITIVE",
+        category: "FIXED_COSTS",
+        title: `Sağlıklı Sabit Sözleşme Yükü (%${fixedCostRatioPercent.toFixed(1)})`,
+        description: `${activeContracts.length} aktif sözleşmenizin aylık toplamı (${formatEurCents(monthlyContractLoadCents, "de")}) gelirinizin %40'ının altında. Bütçe esnekliğiniz oldukça yüksek.`,
+        impactPoints: 25,
+        impactPercent: 1.0,
+        metricBadge: `${formatEurCents(monthlyContractLoadCents, "de")} / Ay Sabit Yük`,
         actionLabel: "Sözleşmeler",
         actionUrl: "/contracts",
       });
-    } else if (activeContracts.length > 0 && fixedCostRatioPercent > 40) {
+    } else if (monthlyContractLoadCents > 0 && (fixedCostRatioPercent > 45 || monthlyIncomeCents === 0)) {
       negativeFactors.push({
-        id: "neg-high-contract-load",
+        id: "neg-high-fixed-costs",
         type: "NEGATIVE",
-        category: "CONTRACT_LOAD",
-        title: `Yüksek Sabit Sözleşme Yükü (${formatEurCents(monthlyContractLoadCents, "de")}/Ay)`,
-        description: `${activeContracts.length} aktif sözleşmeniz aylık bütçenizin önemli bir kısmını bağlıyor. Gereksiz abonelikleri iptal ederek veya tarife değiştirerek skorunuzu yükseltebilirsiniz.`,
-        impactPoints: -18,
-        impactPercent: -0.8,
-        metricBadge: `${activeContracts.length} Aktif Sözleşme`,
+        category: "FIXED_COSTS",
+        title: `Yüksek Aylık Sabit Sözleşme Gideri (${formatEurCents(monthlyContractLoadCents, "de")}/Ay)`,
+        description: `${activeContracts.length} adet aktif sözleşme her ay otomatik olarak ${formatEurCents(monthlyContractLoadCents, "de")} sabit gider oluşturuyor. Tarifeleri yenileyerek bu sabit yükü düşürebilirsiniz.`,
+        impactPoints: -16,
+        impactPercent: -0.6,
+        metricBadge: `${activeContracts.length} Sözleşme • ${formatEurCents(monthlyContractLoadCents * 12, "de")}/Yıl`,
         actionLabel: "Sözleşmeleri Optimize Et",
         actionUrl: "/contracts",
       });
     }
 
-    // 4. Expiring / Auto-renewing Contracts check
-    if (expiringSoonContracts.length > 0) {
-      negativeFactors.push({
-        id: "neg-expiring-contracts",
-        type: "NEGATIVE",
-        category: "CONTRACT_LOAD",
-        title: `${expiringSoonContracts.length} Sözleşmenin İptal Süresi (Kündigungsfrist) Yaklaşıyor`,
-        description: `${expiringSoonContracts.map((c: any) => c.name || c.provider).join(", ")} için fesih tarihi 60 gün içinde doluyor. Otomatik uzamadan önce daha ucuz tarifeye geçiş fırsatı var.`,
-        impactPoints: -12,
-        impactPercent: -0.5,
-        metricBadge: `${expiringSoonContracts.length} Yaklaşan Fesih`,
-        actionLabel: "Sözleşmelere Git",
-        actionUrl: "/contracts",
-      });
+    // 4. Top Variable Expense Category Factor
+    if (topExpenseCategory && topExpenseCategory.amountCents > 0) {
+      if (monthlyIncomeCents > 0 && variableCostRatioPercent <= 30) {
+        positiveFactors.push({
+          id: "pos-controlled-variable-spending",
+          type: "POSITIVE",
+          category: "VARIABLE_SPENDING",
+          title: `Kontrollü Değişken Harcamalar (%${variableCostRatioPercent.toFixed(1)})`,
+          description: `Aylık değişken giderleriniz (${formatEurCents(monthlyVariableExpenseCents, "de")}) 50/30/20 kuralındaki %30 sınırının içinde kalıyor.`,
+          impactPoints: 18,
+          impactPercent: 0.7,
+          metricBadge: `${formatEurCents(monthlyVariableExpenseCents, "de")} / Ay`,
+          actionLabel: "Gider Analizi",
+          actionUrl: "/expenses",
+        });
+      } else {
+        negativeFactors.push({
+          id: "neg-top-expense-category",
+          type: "NEGATIVE",
+          category: "VARIABLE_SPENDING",
+          title: `En Yüksek Harcama Kalemi: "${topExpenseCategory.category}" (${topExpenseCategory.amountFormattedDe}/Ay)`,
+          description: `Aylık değişken giderleriniz içinde en büyük payı "${topExpenseCategory.category}" alıyor. Bu kategoride %15 bütçe limiti belirlemek aylık nakit akışınızı rahatlatır.`,
+          impactPoints: -12,
+          impactPercent: -0.5,
+          metricBadge: `${topExpenseCategory.amountFormattedDe} / Ay`,
+          actionLabel: "Gider Detayları",
+          actionUrl: "/expenses",
+        });
+      }
     }
 
-    // 5. Home Assistant Energy Integration check
+    // 5. Home Assistant Live Energy Cost Factor
     if (energyConnected) {
       positiveFactors.push({
-        id: "pos-ha-energy-connected",
+        id: "pos-ha-live-monitoring",
         type: "POSITIVE",
-        category: "ENERGY_SMART_HOME",
-        title: "Home Assistant Canlı Enerji & Isınma Takibi Aktif",
+        category: "ENERGY_OPTIMIZATION",
+        title: `Canlı Ev Enerji & Isınma Maliyeti Takibi (${formatEurCents(monthlyEnergyCents, "de")}/Ay)`,
         description:
-          monthlyHeatingAndWaterEur > 0
-            ? `Viessmann Vitodens ve ev sensörleriniz canlı izleniyor. Bu ayki ısınma + sıcak su tüketiminiz: ${monthlyHeatingAndWaterEur.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €.`
-            : "Akıllı ev sensörleriniz canlı olarak izleniyor ve sürpriz enerji faturalarına karşı erken uyarı sağlıyor.",
-        impactPoints: 18,
-        impactPercent: 0.7,
-        metricBadge:
-          monthlyHeatingAndWaterEur > 0
-            ? `${monthlyHeatingAndWaterEur.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} € / Ay`
-            : "Canlı Sensör Aktif",
+          "Home Assistant üzerinden Viessmann ısınma ve sıcak su tüketiminiz anlık Euro bazında takip ediliyor; yıl sonu yüksek fatura sürprizi önleniyor.",
+        impactPoints: 16,
+        impactPercent: 0.6,
+        metricBadge: `Bu Ay: ${formatEurCents(monthlyEnergyCents, "de")}`,
         actionLabel: "Enerji Paneli",
         actionUrl: "/energy",
       });
 
-      if (monthlyHeatingAndWaterEur > 180) {
+      if (monthlyHeatingAndWaterEur > 150) {
         negativeFactors.push({
-          id: "neg-high-heating-cost",
+          id: "neg-high-energy-cost",
           type: "NEGATIVE",
-          category: "ENERGY_SMART_HOME",
-          title: `Yüksek Aylık Isınma & Sıcak Su Maliyeti (${monthlyHeatingAndWaterEur.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €)`,
+          category: "ENERGY_OPTIMIZATION",
+          title: `Yüksek Aylık Isınma & Sıcak Su Gideri (${formatEurCents(monthlyEnergyCents, "de")}/Ay)`,
           description:
-            "Home Assistant verilerine göre aylık doğalgaz/ısınma tüketiminiz ortalamanın üzerinde seyrediyor. Oda sıcaklığını 1 °C düşürmek yıllık %6 tasarruf sağlar.",
+            "Bu ayki kalorifer ve sıcak su doğalgaz maliyetiniz aylık giderlerinizi yukarı çekiyor. Gece sıcaklık düşürme programı ile %12-%15 tasarruf mümkündür.",
           impactPoints: -10,
           impactPercent: -0.4,
-          metricBadge: `${monthlyHeatingAndWaterEur.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`,
-          actionLabel: "Enerji Sensörleri",
+          metricBadge: `${formatEurCents(monthlyEnergyCents, "de")} / Ay`,
+          actionLabel: "Enerji Paneli",
           actionUrl: "/energy",
         });
       }
-    } else {
-      negativeFactors.push({
-        id: "neg-ha-disconnected",
-        type: "NEGATIVE",
-        category: "ENERGY_SMART_HOME",
-        title: "Canlı Enerji Verisi Henüz Hesaba Katılmadı",
-        description:
-          "Home Assistant enerji sensörleri bağlandığında elektrik ve doğalgaz tüketiminiz skorunuza pozitif şeffaflık puanı kazandırır.",
-        impactPoints: -8,
-        impactPercent: -0.3,
-        metricBadge: "Sensör Bekleniyor",
-        actionLabel: "Enerji Ayarları",
-        actionUrl: "/energy",
-      });
     }
 
-    // 6. Applied vs Open Savings Advice
+    // 6. Applied & Open Savings Potential
     if (appliedAdvice.length > 0) {
       positiveFactors.push({
-        id: "pos-applied-savings",
+        id: "pos-realized-savings",
         type: "POSITIVE",
-        category: "WEALTH_OPTIMIZATION",
-        title: `${appliedAdvice.length} Tasarruf Adımı Uygulandı (+${formatEurCents(realizedMonthlySavingsCents * 12, "de")}/Yıl)`,
-        description:
-          "Tasarruf danışmanındaki önerileri hayata geçirerek kalıcı bütçe iyileştirmesi sağladınız.",
-        impactPoints: 22,
-        impactPercent: 0.9,
-        metricBadge: `+${formatEurCents(realizedMonthlySavingsCents, "de")} / Ay`,
+        category: "SAVINGS_RATE",
+        title: `Uygulanan Tasarruf Adımlarıyla Aylık +${formatEurCents(realizedMonthlySavingsCents, "de")} Kazanç`,
+        description: `${appliedAdvice.length} adet tasarruf önerisini hayata geçirerek yıllık ${formatEurCents(realizedMonthlySavingsCents * 12, "de")} kalıcı bütçe iyileştirmesi sağladınız.`,
+        impactPoints: 20,
+        impactPercent: 0.8,
+        metricBadge: `+${formatEurCents(realizedMonthlySavingsCents * 12, "de")} / Yıl`,
         actionLabel: "Tasarruf Paneli",
         actionUrl: "/advisor",
       });
@@ -573,61 +578,57 @@ export async function GET(req: NextRequest) {
 
     if (potentialMonthlySavingsCents > 0) {
       negativeFactors.push({
-        id: "neg-unclaimed-savings",
+        id: "neg-untapped-savings",
         type: "NEGATIVE",
-        category: "WEALTH_OPTIMIZATION",
-        title: `Henüz Değerlendirilmemiş ${formatEurCents(potentialMonthlySavingsCents * 12, "de")}/Yıl Tasarruf Fırsatı`,
-        description: `Tasarruf danışmanında açık bekleyen ${openAdvice.length} öneriyi uygulayarak aylık ${formatEurCents(potentialMonthlySavingsCents, "de")} ek nakit yaratabilirsiniz.`,
-        impactPoints: -10,
-        impactPercent: -0.4,
-        metricBadge: `${formatEurCents(potentialMonthlySavingsCents, "de")} / Ay Potansiyel`,
+        category: "SAVINGS_RATE",
+        title: `Her Ay Masada Kalan ${formatEurCents(potentialMonthlySavingsCents, "de")} Tasarruf Potansiyeli`,
+        description: `Henüz uygulanmamış ${openAdvice.length} adet tasarruf önerisi nedeniyle yılda ${formatEurCents(potentialMonthlySavingsCents * 12, "de")} fazladan gider oluşuyor.`,
+        impactPoints: -12,
+        impactPercent: -0.5,
+        metricBadge: `${formatEurCents(potentialMonthlySavingsCents * 12, "de")} / Yıl Fırsat`,
         actionLabel: "Tavsiyeleri Uygula",
         actionUrl: "/advisor",
       });
     }
 
-    // 7. Overdue Reminders check
-    if (overdueReminders.length > 0) {
+    if (expiringSoonContracts.length > 0) {
       negativeFactors.push({
-        id: "neg-overdue-reminders",
+        id: "neg-expiring-contracts",
         type: "NEGATIVE",
-        category: "PAYMENT_HISTORY",
-        title: `${overdueReminders.length} Adet Gecikmiş Hatırlatıcı / Görev`,
-        description:
-          "Takvimde süresi geçmiş tamamlanmamış hatırlatıcılar bulunuyor.",
-        impactPoints: -Math.min(20, overdueReminders.length * 7),
-        impactPercent: -0.5,
-        metricBadge: `${overdueReminders.length} Gecikmiş Görev`,
-        actionLabel: "Hatırlatıcılar",
-        actionUrl: "/reminders",
+        category: "FIXED_COSTS",
+        title: `${expiringSoonContracts.length} Sözleşmenin Fesih Süresi Yaklaşıyor`,
+        description: `${expiringSoonContracts.map((c: any) => c.name || c.provider).join(", ")} sözleşmelerinde daha uygun tarifeye geçerek aylık sabit giderinizi düşürebilirsiniz.`,
+        impactPoints: -10,
+        impactPercent: -0.4,
+        metricBadge: `${expiringSoonContracts.length} Sözleşme`,
+        actionLabel: "Sözleşmeleri Gör",
+        actionUrl: "/contracts",
       });
     }
 
     // =========================================================================
-    // SMART ACTIONABLE RECOMMENDATIONS (Score Boosters)
+    // ACTIONABLE MONTHLY INCOME/EXPENSE IMPROVEMENT RECOMMENDATIONS
     // =========================================================================
     const recommendations: ScoreRecommendation[] = [];
 
-    if (overdueInvoices.length > 0) {
-      const sumOverdue = sumCents(
-        overdueInvoices.map((i: any) => Number(i.amountCents ?? 0))
-      );
+    if (monthlyIncomeCents === 0) {
       recommendations.push({
-        id: "rec-pay-overdue",
-        title: `Gecikmiş ${overdueInvoices.length} Faturayı Kapatarak Skorunuzu Hızla Yükseltin`,
-        description: `Toplam ${formatEurCents(sumOverdue, "de")} tutarındaki gecikmiş faturaları ödendi olarak işaretlediğinizde ödeme disiplini puanınız anında maksimum seviyeye çıkar.`,
-        category: "DEBT_PAYOFF",
+        id: "rec-add-monthly-income",
+        title: "Aylık Düzenli Gelirlerinizi (Maaş / Kira / Ek Gelir) Sisteme Girin",
+        description:
+          "Gelir-gider dengenizin, tasarruf oranınızın ve 50/30/20 bütçe kuralının tam doğrulukla hesaplanması için aylık gelir kalemlerinizi ekleyin.",
+        category: "BUDGET",
         priority: "CRITICAL",
-        potentialScoreGainPoints: Math.min(60, overdueInvoices.length * 22),
-        potentialScoreGainPercent: 2.1,
-        estimatedMonthlySavingsCents: 1500,
-        estimatedMonthlySavingsFormattedDe: "15,00 € (Gecikme Faizi Önleme)",
-        estimatedYearlySavingsFormattedDe: "180,00 €",
-        actionUrl: "/invoices",
+        potentialScoreGainPoints: 35,
+        potentialScoreGainPercent: 1.5,
+        estimatedMonthlySavingsCents: 25000,
+        estimatedMonthlySavingsFormattedDe: "Tam Bütçe Görünürlüğü",
+        estimatedYearlySavingsFormattedDe: "A+ Skor Seviyesi",
+        actionUrl: "/income",
         actionSteps: [
-          "Faturalar (/invoices) sayfasına gidin.",
-          "Vadesi geçmiş faturaların ödemesini tamamlayıp durumunu 'PAID' (Ödendi) yapın.",
-          "Otomatik ödeme talimatı (SEPA-Lastschrift) tanımlayarak gecikmeleri sıfırlayın.",
+          "Gelirler (/income) sayfasına gidin.",
+          "Aylık net maaş ve varsa diğer düzenli gelirlerinizi kaydedin.",
+          "Gelir eklendiği anda aylık tasarruf oranınız ve skorunuz otomatik güncellenir.",
         ],
       });
     }
@@ -638,37 +639,64 @@ export async function GET(req: NextRequest) {
         Number(topContract.amountCents ?? 0),
         topContract.billingFrequency
       );
-      const estSave = Math.max(1200, Math.round(topMonthly * 0.18));
+      const estSave = Math.max(1500, Math.round(topMonthly * 0.18));
       recommendations.push({
-        id: "rec-optimize-top-contract",
-        title: `"${topContract.name}" (${topContract.provider}) Sözleşmesinde Tarife Karşılaştırması Yapın`,
-        description: `En yüksek sabit giderlerinizden biri olan bu sözleşme aylık ${formatEurCents(topMonthly, "de")} tutarında. Yeni müşteri kampanyası veya alternatif sağlayıcı ile ortalama %15-%20 tasarruf sağlanabilir.`,
+        id: "rec-optimize-contracts",
+        title: `Sabit Sözleşme Yükünü Azaltın: "${topContract.name}" (${topContract.provider})`,
+        description: `Aylık ${formatEurCents(topMonthly, "de")} olan en büyük sabit sözleşme giderinizi alternatif tarife veya sadakat indirimiyle %18 düşürerek aylık sabit gider oranınızı iyileştirin.`,
         category: "CONTRACT_OPTIMIZATION",
         priority: "HIGH",
-        potentialScoreGainPoints: 18,
-        potentialScoreGainPercent: 0.75,
+        potentialScoreGainPoints: 20,
+        potentialScoreGainPercent: 0.85,
         estimatedMonthlySavingsCents: estSave,
         estimatedMonthlySavingsFormattedDe: formatEurCents(estSave, "de"),
         estimatedYearlySavingsFormattedDe: formatEurCents(estSave * 12, "de"),
         actionUrl: "/contracts",
         actionSteps: [
-          `${topContract.provider} mevcut tarifesini güncel piyasa fiyatlarıyla karşılaştırın.`,
-          topContract.cancellationDeadline
-            ? `Son iptal tarihi (${formatDateDe(topContract.cancellationDeadline)}) geçmeden sağlayıcıdan indirim talep edin.`
-            : "Sözleşmeye son fesih tarihini (Kündigungsfrist) ekleyin.",
+          `${topContract.provider} sözleşmesini güncel kampanyalarla karşılaştırın.`,
+          "Kullanılmayan ek paket veya abonelikleri iptal ederek aylık sabit gideri düşürün.",
         ],
       });
     }
 
-    if (energyConnected && monthlyHeatingAndWaterEur > 40) {
+    if (monthlyVariableExpenseCents > 0) {
+      const targetCutCents = Math.max(
+        3000,
+        Math.round(monthlyVariableExpenseCents * 0.15)
+      );
+      recommendations.push({
+        id: "rec-reduce-variable-expenses",
+        title: topExpenseCategory
+          ? `"${topExpenseCategory.category}" ve Değişken Giderlerde %15 Bütçe Tavanı Uygulayın`
+          : "Aylık Değişken Harcamalarda %15 Tasarruf Kuralı Uygulayın",
+        description: `Aylık ${formatEurCents(monthlyVariableExpenseCents, "de")} olan değişken harcamalarınızı %15 kısarak her ay doğrudan ${formatEurCents(targetCutCents, "de")} ek net birikim yaratabilirsiniz.`,
+        category: "BUDGET",
+        priority: "HIGH",
+        potentialScoreGainPoints: 18,
+        potentialScoreGainPercent: 0.75,
+        estimatedMonthlySavingsCents: targetCutCents,
+        estimatedMonthlySavingsFormattedDe: formatEurCents(targetCutCents, "de"),
+        estimatedYearlySavingsFormattedDe: formatEurCents(
+          targetCutCents * 12,
+          "de"
+        ),
+        actionUrl: "/expenses",
+        actionSteps: [
+          "Giderler (/expenses) sayfasından en yüksek 3 harcama kalemini inceleyin.",
+          "Dürtüsel alışveriş ve dışarıda yeme giderleri için haftalık limit belirleyin.",
+        ],
+      });
+    }
+
+    if (energyConnected && monthlyHeatingAndWaterEur > 30) {
       const saveCents = Math.max(
         1800,
-        Math.round(monthlyHeatingAndWaterEur * 100 * 0.12)
+        Math.round(monthlyHeatingAndWaterEur * 100 * 0.14)
       );
       recommendations.push({
         id: "rec-heating-optimization",
-        title: "Viessmann Vitodens Gece Düşürme & Sıcak Su Programı Optimizasyonu",
-        description: `Home Assistant üzerinden ölçülen aylık ${monthlyHeatingAndWaterEur.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} € ısınma + sıcak su maliyetinizi, gece sıcaklığını 1,5 °C düşürerek ve sıcak su sirkülasyon saatlerini daraltarak %12 azaltabilirsiniz.`,
+        title: "Isınma & Sıcak Su Giderini Optimize Edin (Viessmann Vitodens)",
+        description: `Bu ay ${formatEurCents(monthlyEnergyCents, "de")} olan ısınma + sıcak su maliyetinizi gece modunu 18.5 °C'ye çekerek ve sıcak su saatlerini optimize ederek %14 düşürün.`,
         category: "SAVINGS",
         priority: "MEDIUM",
         potentialScoreGainPoints: 14,
@@ -678,25 +706,25 @@ export async function GET(req: NextRequest) {
         estimatedYearlySavingsFormattedDe: formatEurCents(saveCents * 12, "de"),
         actionUrl: "/energy",
         actionSteps: [
-          "Oturma odası (21.0 °C) ve çocuk odası (20.9 °C) sensörlerine göre gece 23:00–06:00 arası kombi hedefini 18.5 °C yapın.",
-          "Sıcak su (Warmwasser) ısıtma saatlerini sadece sabah ve akşam kullanım saatleriyle sınırlandırın.",
+          "Gece 23:00–06:00 arası hedef oda sıcaklığını 1–1,5 °C düşürün.",
+          "Oda nem oranını %50–%60 aralığında tutarak ısı kaybını azaltın.",
         ],
       });
     }
 
     const suggestedReserveMonthlyCents =
       monthlyIncomeCents > 0
-        ? Math.max(10000, Math.round(monthlyIncomeCents * 0.1))
-        : 15000;
+        ? Math.max(15000, Math.round(monthlyIncomeCents * 0.2))
+        : 20000;
     recommendations.push({
-      id: "rec-emergency-fund",
-      title: "Otomatik Acil Durum & Birikim Fonu (Notgroschen — 3 Aylık Gider Hedefi)",
+      id: "rec-50-30-20-rule",
+      title: "50 / 30 / 20 Altın Bütçe Kuralı ile Otomatik %20 Birikim Ayırın",
       description:
-        "Finansal sağlık skorunu kalıcı olarak A+ seviyesinde tutmak için her ay maaş günü otomatik ayrılan bir acil durum fonu ve ETF/Tagesgeld birikim planı oluşturun.",
+        "Gelirinizin %50'sini sabit giderlere, %30'unu yaşam/değişken giderlere, %20'sini ise maaş yatar yatmaz otomatik birikim/yatırım hesabına yönlendirin.",
       category: "WEALTH",
       priority: "HIGH",
       potentialScoreGainPoints: 25,
-      potentialScoreGainPercent: 0.95,
+      potentialScoreGainPercent: 1.0,
       estimatedMonthlySavingsCents: suggestedReserveMonthlyCents,
       estimatedMonthlySavingsFormattedDe: formatEurCents(
         suggestedReserveMonthlyCents,
@@ -708,8 +736,8 @@ export async function GET(req: NextRequest) {
       ),
       actionUrl: "/advisor",
       actionSteps: [
-        "Ay başında sabit giderler çıktıktan hemen sonra otomatik transfer (Dauerauftrag) tanımlayın.",
-        "En az 3 aylık sabit gider tutarını yüksek faizli Tagesgeld hesabında tutun.",
+        "Maaş günü gelirinizin %20'sini ayrı bir birikim (Tagesgeld / ETF) hesabına aktarın.",
+        "Sabit sözleşme giderlerinizi toplam gelirin %40'ının altında tutun.",
       ],
     });
 
@@ -728,49 +756,62 @@ export async function GET(req: NextRequest) {
       },
       subScores: [
         {
-          key: "PAYMENT_HISTORY",
-          labelTr: "Ödeme Disiplini & Faturalar",
-          labelDe: "Zahlungsverhalten",
-          weightPercent: 30,
-          score: paymentScore,
+          key: "INCOME_EXPENSE_BALANCE",
+          labelTr: "Gelir / Gider Dengesi & Net Nakit Akışı",
+          labelDe: "Einnahmen-Ausgaben-Bilanz",
+          weightPercent: 35,
+          score: balanceScore,
           status:
-            paymentScore >= 90
+            balanceScore >= 85
               ? "EXCELLENT"
-              : paymentScore >= 75
+              : balanceScore >= 70
                 ? "GOOD"
                 : "WARNING",
         },
         {
-          key: "CASHFLOW_SAVINGS",
-          labelTr: "Nakit Akışı & Tasarruf Oranı",
-          labelDe: "Cashflow & Sparquote",
+          key: "SAVINGS_RATE",
+          labelTr: "Aylık Tasarruf & Birikim Oranı (Hedef %20)",
+          labelDe: "Monatliche Sparquote",
           weightPercent: 25,
-          score: cashflowScore,
+          score: savingsScore,
           status:
-            cashflowScore >= 85
+            savingsScore >= 85
               ? "EXCELLENT"
-              : cashflowScore >= 70
+              : savingsScore >= 70
                 ? "GOOD"
                 : "WARNING",
         },
         {
-          key: "CONTRACT_LOAD",
-          labelTr: "Sabit Sözleşme & Abonelik Yükü",
-          labelDe: "Fixkosten & Verträge",
+          key: "FIXED_COSTS",
+          labelTr: "Sabit Gider & Sözleşme Yükü (Hedef <%40)",
+          labelDe: "Fixkostenquote",
           weightPercent: 20,
-          score: contractScore,
+          score: fixedCostScore,
           status:
-            contractScore >= 85
+            fixedCostScore >= 85
               ? "EXCELLENT"
-              : contractScore >= 70
+              : fixedCostScore >= 70
                 ? "GOOD"
                 : "WARNING",
         },
         {
-          key: "WEALTH_OPTIMIZATION",
-          labelTr: "Birikim Hedefleri & Optimizasyon",
-          labelDe: "Vermögensaufbau",
-          weightPercent: 15,
+          key: "VARIABLE_SPENDING",
+          labelTr: "Değişken Harcama & Tüketim Kontrolü",
+          labelDe: "Variable Ausgaben",
+          weightPercent: 10,
+          score: variableSpendingScore,
+          status:
+            variableSpendingScore >= 85
+              ? "EXCELLENT"
+              : variableSpendingScore >= 70
+                ? "GOOD"
+                : "WARNING",
+        },
+        {
+          key: "ENERGY_OPTIMIZATION",
+          labelTr: "Ev Enerji Maliyeti & Tasarruf Optimizasyonu",
+          labelDe: "Energie & Optimierung",
+          weightPercent: 10,
           score: optimizationScore,
           status:
             optimizationScore >= 85
@@ -779,26 +820,13 @@ export async function GET(req: NextRequest) {
                 ? "GOOD"
                 : "WARNING",
         },
-        {
-          key: "ENERGY_SMART_HOME",
-          labelTr: "Ev Enerji & Isınma Verimliliği",
-          labelDe: "Energieeffizienz (HA)",
-          weightPercent: 10,
-          score: energyScore,
-          status:
-            energyScore >= 85
-              ? "EXCELLENT"
-              : energyScore >= 70
-                ? "GOOD"
-                : "WARNING",
-        },
       ],
       metrics: {
         monthlyIncomeCents,
         monthlyIncomeFormattedDe: formatEurCents(monthlyIncomeCents, "de"),
-        monthlyTxExpenseCents,
+        monthlyTxExpenseCents: monthlyVariableExpenseCents,
         monthlyTxExpenseFormattedDe: formatEurCents(
-          monthlyTxExpenseCents,
+          monthlyVariableExpenseCents,
           "de"
         ),
         monthlyContractLoadCents,
@@ -808,9 +836,9 @@ export async function GET(req: NextRequest) {
         ),
         monthlyEnergyCents,
         monthlyEnergyFormattedDe: formatEurCents(monthlyEnergyCents, "de"),
-        totalMonthlyOutflowCents,
+        totalMonthlyOutflowCents: totalMonthlyExpenseCents,
         totalMonthlyOutflowFormattedDe: formatEurCents(
-          totalMonthlyOutflowCents,
+          totalMonthlyExpenseCents,
           "de"
         ),
         netMonthlyCashflowCents,
@@ -820,10 +848,11 @@ export async function GET(req: NextRequest) {
         ),
         savingsRatePercent,
         fixedCostRatioPercent,
+        variableCostRatioPercent,
+        totalExpenseToIncomePercent,
         activeContractsCount: activeContracts.length,
-        overdueInvoicesCount: overdueInvoices.length,
-        unpaidInvoicesCount: unpaidInvoices.length,
         energyConnected,
+        topExpenseCategories: sortedExpenseCategories.slice(0, 5),
       },
       positiveFactors,
       negativeFactors,
