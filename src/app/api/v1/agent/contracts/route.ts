@@ -307,6 +307,23 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  if (actor.actorType === "HERMES_AGENT") {
+    await prisma.notification
+      .create({
+        data: {
+          title: `Vertrag erfasst: ${contract.provider}`,
+          message: `${contract.title} (${formatEurCents(amountCents, "de")}) wurde von Hermes Agent eingetragen.`,
+          type: "CONTRACT",
+          priority: "HIGH",
+          actionUrl: "/contracts",
+          readAt: null,
+          createdBy: actor.actorType,
+          userId: actor.userId,
+        },
+      })
+      .catch(() => {});
+  }
+
   await recordAuditEvent({
     actor,
     action: "CONTRACT_CREATED",

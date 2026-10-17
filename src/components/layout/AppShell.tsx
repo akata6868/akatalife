@@ -55,7 +55,7 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
   const [authChecked, setAuthChecked] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
-  // Real-time notifications state
+  // Real-time notifications & PWA install state
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -63,6 +63,9 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
   const [notifPermission, setNotifPermission] =
     useState<NotificationPermission>("default");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
 
   const seenIdsRef = useRef<Set<string>>(new Set());
   const initialLoadDoneRef = useRef(false);
@@ -70,7 +73,7 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
   const t = dictionaries[locale];
   const isLoginPage = pathname === "/login";
 
-  // Register Service Worker & check Notification permission
+  // Register Service Worker, check Notification permission & capture PWA install prompt
   useEffect(() => {
     if (typeof window === "undefined") return;
     if ("Notification" in window) {
@@ -79,6 +82,18 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
+    const standalone =
+      window.matchMedia("(display-mode: standalone)").matches ||
+      Boolean((window.navigator as any).standalone);
+    setIsStandalone(standalone);
+
+    const onBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setDeferredInstallPrompt(e);
+    };
+    window.addEventListener("beforeinstallprompt", onBeforeInstall);
+    return () =>
+      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
   }, []);
 
   useEffect(() => {
@@ -102,7 +117,34 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
       });
   }, [isLoginPage, pathname, router]);
 
+  function playNotificationChime() {
+    if (typeof window === "undefined") return;
+    try {
+      if ("vibrate" in navigator) {
+        navigator.vibrate([180, 80, 180]);
+      }
+      const AudioCtx =
+        window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.12); // A5
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.45);
+    } catch {
+      // Ignore if autoplay audio is blocked before interaction
+    }
+  }
+
   function triggerNativeNotification(item: NotificationItem) {
+    playNotificationChime();
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
 
@@ -121,10 +163,36 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
       try {
         new Notification(item.title, {
           body: item.message,
-          icon: "/icon.svg",
+          icon: "/icon",
         });
       } catch {
         // Ignore on platforms requiring SW registration
+      }
+    }
+  }
+
+  function processIncomingNotifications(
+    list: NotificationItem[],
+    unread: number
+  ) {
+    setNotifications(list);
+    setUnreadCount(unread);
+
+    if (!initialLoadDoneRef.current) {
+      for (const item of list) {
+        seenIdsRef.current.add(item.id);
+      }
+      initialLoadDoneRef.current = true;
+      return;
+    }
+
+    for (const item of list) {
+      if (!seenIdsRef.current.has(item.id)) {
+        seenIdsRef.current.add(item.id);
+        if (!item.isRead) {
+          setLiveToast(item);
+          triggerNativeNotification(item);
+        }
       }
     }
   }
@@ -136,37 +204,39 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
       });
       if (!res.ok) return;
       const data = await res.json();
-      const list: NotificationItem[] = data.notifications ?? [];
-      setNotifications(list);
-      setUnreadCount(Number(data.unreadCount ?? 0));
-
-      if (!initialLoadDoneRef.current) {
-        for (const item of list) {
-          seenIdsRef.current.add(item.id);
-        }
-        initialLoadDoneRef.current = true;
-        return;
-      }
-
-      for (const item of list) {
-        if (!seenIdsRef.current.has(item.id)) {
-          seenIdsRef.current.add(item.id);
-          if (!item.isRead) {
-            setLiveToast(item);
-            triggerNativeNotification(item);
-          }
-        }
-      }
+      processIncomingNotifications(
+        data.notifications ?? [],
+        Number(data.unreadCount ?? 0)
+      );
     } catch {
       // Ignore network hiccups during background poll
     }
   }
 
+  // Real-time SSE stream (/api/v1/agent/notifications/stream) + fallback polling
   useEffect(() => {
     if (isLoginPage || !authChecked) return;
     pollNotifications();
+
+    let es: EventSource | null = null;
+    if (typeof window !== "undefined" && "EventSource" in window) {
+      es = new EventSource("/api/v1/agent/notifications/stream");
+      es.addEventListener("notifications", (evt: MessageEvent) => {
+        try {
+          const parsed = JSON.parse(evt.data);
+          processIncomingNotifications(
+            parsed.notifications ?? [],
+            Number(parsed.unreadCount ?? 0)
+          );
+        } catch {}
+      });
+    }
+
     const interval = setInterval(pollNotifications, 10000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (es) es.close();
+    };
   }, [isLoginPage, authChecked]);
 
   async function requestPushPermission() {
@@ -174,20 +244,33 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
     const perm = await Notification.requestPermission();
     setNotifPermission(perm);
     if (perm === "granted") {
-      // Send a confirmation notification
-      await fetch("/api/v1/agent/notifications", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: "Echtzeit-Benachrichtigungen aktiviert",
-          message:
-            "Akata Life & Hermes Agent senden Ihnen ab sofort Echtzeit-Mitteilungen direkt auf Ihr Gerät.",
-          type: "INFO",
-          priority: "HIGH",
-          actionUrl: "/",
-        }),
-      });
-      await pollNotifications();
+      await sendTestNotification();
+    }
+  }
+
+  async function sendTestNotification() {
+    await fetch("/api/v1/agent/notifications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Akata Life — Canlı Bildirim Aktif",
+        message:
+          "Gerçek zamanlı bildirim sistemi ve uygulama modu sorunsuz çalışıyor.",
+        type: "INFO",
+        priority: "HIGH",
+        actionUrl: "/advisor",
+      }),
+    });
+    await pollNotifications();
+  }
+
+  async function handleInstallApp() {
+    if (deferredInstallPrompt) {
+      deferredInstallPrompt.prompt();
+      await deferredInstallPrompt.userChoice.catch(() => {});
+      setDeferredInstallPrompt(null);
+    } else {
+      setShowInstallHelp(true);
     }
   }
 
@@ -395,6 +478,13 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
                 </span>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={sendTestNotification}
+                  className="px-2 py-1 rounded-md bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800 text-[11px] font-semibold"
+                >
+                  Test Bildirimi
+                </button>
                 {unreadCount > 0 && (
                   <button
                     type="button"
@@ -415,21 +505,58 @@ export function AppShell({ children, initialLocale = "de" }: AppShellProps) {
               </div>
             </div>
 
-            {/* Push Permission Banner */}
-            {notifPermission !== "granted" && (
-              <div className="p-3 bg-teal-50 dark:bg-teal-950/50 border-b border-teal-200 dark:border-teal-900 flex items-center justify-between gap-2">
-                <span className="text-xs text-teal-800 dark:text-teal-200">
-                  Push-Mitteilungen für dieses Gerät aktivieren:
-                </span>
-                <button
-                  type="button"
-                  onClick={requestPushPermission}
-                  className="px-3 py-1.5 rounded-lg bg-teal-700 text-white text-xs font-semibold shrink-0"
-                >
-                  Aktivieren (Aç)
-                </button>
-              </div>
-            )}
+            {/* Push Permission & App Install Bar */}
+            <div className="p-3 bg-teal-50/70 dark:bg-teal-950/40 border-b border-teal-200 dark:border-teal-900 space-y-2">
+              {notifPermission !== "granted" ? (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-teal-800 dark:text-teal-200">
+                    Canlı Cihaz Bildirimleri (Push):
+                  </span>
+                  <button
+                    type="button"
+                    onClick={requestPushPermission}
+                    className="px-3 py-1.5 rounded-lg bg-teal-700 text-white text-xs font-semibold shrink-0"
+                  >
+                    Bildirimleri Aç (Aktivieren)
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2 text-xs text-emerald-700 dark:text-emerald-400 font-medium">
+                  <span>✓ Gerçek zamanlı bildirimler aktif (SSE + Push)</span>
+                </div>
+              )}
+
+              {!isStandalone && (
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-teal-200/60 dark:border-teal-900">
+                  <span className="text-xs text-slate-600 dark:text-slate-300">
+                    Telefon / Masaüstü App Modu:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleInstallApp}
+                    className="px-3 py-1 rounded-lg border border-teal-600 text-teal-700 dark:text-teal-300 text-xs font-semibold"
+                  >
+                    Uygulama Olarak Kur
+                  </button>
+                </div>
+              )}
+
+              {showInstallHelp && (
+                <div className="rounded-lg bg-white dark:bg-slate-900 p-2.5 text-[11px] text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 space-y-1">
+                  <p>
+                    <strong>iPhone / iPad (Safari):</strong> Alt bardaki{" "}
+                    <strong>Paylaş (Teilen)</strong> ikonuna dokunun ve{" "}
+                    <strong>&quot;Ana Ekrana Ekle (Zum Home-Bildschirm)&quot;</strong>{" "}
+                    seçeneğine basın.
+                  </p>
+                  <p>
+                    <strong>Android / Bilgisayar (Chrome):</strong> Sağ üst menüden{" "}
+                    <strong>&quot;Uygulamayı Yükle / Ana ekrana ekle&quot;</strong>{" "}
+                    seçeneğine tıklayın.
+                  </p>
+                </div>
+              )}
+            </div>
 
             <div className="max-h-96 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
               {notifications.length === 0 ? (
