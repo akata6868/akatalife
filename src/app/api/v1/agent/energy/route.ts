@@ -123,6 +123,7 @@ export async function GET(req: NextRequest) {
       syncedAtFormattedDe: formatDateTimeDe(result.syncedAt),
       error: result.error ?? null,
       sensors: result.sensors,
+      catalog: result.catalog ?? [],
     });
   } catch (err) {
     return NextResponse.json(
@@ -130,6 +131,7 @@ export async function GET(req: NextRequest) {
         enabled: false,
         ok: false,
         sensors: [],
+        catalog: [],
         error:
           err instanceof Error
             ? err.message
@@ -152,8 +154,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "ValidationError" }, { status: 400 });
     }
 
-    const enabled = Boolean(body.enabled);
-    const rawUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
+    const [existing, haPlugin] = await Promise.all([
+      prisma.homeAssistantConfig.findUnique({ where: { id: "singleton" } }),
+      prisma.pluginIntegration.findFirst({ where: { slug: "home-assistant" } }),
+    ]);
+
+    const enabled =
+      typeof body.enabled === "boolean"
+        ? body.enabled
+        : Boolean(existing?.enabled ?? true);
+    const rawUrl =
+      typeof body.baseUrl === "string"
+        ? body.baseUrl.trim()
+        : (existing?.baseUrl ?? haPlugin?.baseUrl ?? "");
     const baseUrl = rawUrl ? normalizeHomeAssistantBaseUrl(rawUrl) : null;
     const rawToken =
       typeof body.token === "string" && body.token.trim().length > 0
@@ -162,11 +175,6 @@ export async function POST(req: NextRequest) {
     const entityIds = Array.isArray(body.entityIds)
       ? body.entityIds.map((id: unknown) => String(id).trim()).filter(Boolean)
       : [];
-
-    const [existing, haPlugin] = await Promise.all([
-      prisma.homeAssistantConfig.findUnique({ where: { id: "singleton" } }),
-      prisma.pluginIntegration.findFirst({ where: { slug: "home-assistant" } }),
-    ]);
 
     const fallbackEncrypted =
       existing?.tokenEncrypted || haPlugin?.apiKeyEncrypted || null;
